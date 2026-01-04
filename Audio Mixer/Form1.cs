@@ -42,6 +42,7 @@ namespace Audio_Mixer
         private TableLayoutPanel channelsHeaderTable = null!;
         private Panel channelsScrollPanel = null!;
         private StatusDot statusDot = null!;
+        private ContextMenuStrip profileMenu = null!;
 
         private Color BackgroundColor => Color.FromArgb(settings.BackgroundColorArgb);
         private Color SurfaceColor => Color.FromArgb(settings.SurfaceColorArgb);
@@ -57,7 +58,10 @@ namespace Audio_Mixer
             InitializeComponent();
             BuildUi();
             UpdateDevices();
-            ApplySettings(settings);
+            if (!TryAutoLoadLastConfig())
+            {
+                ApplySettings(settings);
+            }
             StartAutoScan();
         }
 
@@ -81,7 +85,9 @@ namespace Audio_Mixer
             {
                 Dock = DockStyle.Fill,
                 BackColor = BackgroundColor,
+                DrawMode = TabDrawMode.OwnerDrawFixed,
             };
+            mainTabControl.DrawItem += MainTabControlOnDrawItem;
             Controls.Add(mainTabControl);
 
             var mixerTab = new TabPage("Mixer")
@@ -181,18 +187,6 @@ namespace Audio_Mixer
                 Padding = new Padding(0),
             };
 
-            var gamingButton = CreateHeaderButton("Gaming");
-            gamingButton.Click += (_, _) => LoadProfile("gaming");
-            actionPanel.Controls.Add(gamingButton);
-
-            var streamingButton = CreateHeaderButton("Streaming");
-            streamingButton.Click += (_, _) => LoadProfile("streaming");
-            actionPanel.Controls.Add(streamingButton);
-
-            var officeButton = CreateHeaderButton("Office");
-            officeButton.Click += (_, _) => LoadProfile("office");
-            actionPanel.Controls.Add(officeButton);
-
             rescanButton = CreateHeaderButton("Auto-Suche");
             rescanButton.Click += (_, _) => StartAutoScan();
             actionPanel.Controls.Add(rescanButton);
@@ -278,9 +272,10 @@ namespace Audio_Mixer
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 AutoSize = true,
             };
+            generalContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             generalContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             generalContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             generalCard.Controls.Add(generalContainer);
@@ -357,6 +352,38 @@ namespace Audio_Mixer
             saveSettingsButton.FlatAppearance.BorderSize = 0;
             saveSettingsButton.Click += (_, _) => SaveSettingsToFile();
             settingsPanel.Controls.Add(saveSettingsButton, 5, 0);
+
+            profileMenu = new ContextMenuStrip();
+            profileMenu.Items.Add("Gaming", null, (_, _) => LoadProfile("gaming", true));
+            profileMenu.Items.Add("Streaming", null, (_, _) => LoadProfile("streaming", true));
+            profileMenu.Items.Add("Office", null, (_, _) => LoadProfile("office", true));
+            profileMenu.Items.Add(new ToolStripSeparator());
+            profileMenu.Items.Add("Aus Datei laden...", null, (_, _) => LoadSettingsFromFile());
+            profileMenu.Items.Add("Aktuelle Einstellungen speichern...", null, (_, _) => SaveSettingsToFile());
+
+            var profileButton = new Button
+            {
+                Text = "Profile ▾",
+                AutoSize = true,
+                BackColor = AccentColor,
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White,
+                Margin = new Padding(0, 8, 0, 0),
+                Padding = new Padding(8, 4, 8, 4),
+            };
+            profileButton.FlatAppearance.BorderSize = 0;
+            profileButton.Click += (_, _) => profileMenu.Show(profileButton, new Point(0, profileButton.Height));
+
+            var profilePanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+            };
+            profilePanel.Controls.Add(profileButton);
+            generalContainer.Controls.Add(profilePanel, 0, 2);
 
             var connectionCard = CreateCardPanel();
             connectionCard.Margin = new Padding(0, 0, 0, 16);
@@ -687,27 +714,24 @@ namespace Audio_Mixer
             audioManager.SetDeviceVolume(deviceId, volume);
         }
 
-        private void LoadProfile(string profileName)
+        private void LoadProfile(string profileName, bool persist)
         {
             var profilePath = Path.Combine(AppContext.BaseDirectory, $"{profileName}.json");
             MixerSettings? profile = null;
 
-            if (File.Exists(profilePath))
+            if (TryReadSettingsFromPath(profilePath, false, out var loaded))
             {
-                try
-                {
-                    var json = File.ReadAllText(profilePath);
-                    profile = JsonSerializer.Deserialize<MixerSettings>(json);
-                }
-                catch
-                {
-                    profile = null;
-                }
+                profile = loaded;
             }
 
             profile ??= GetFallbackProfile(profileName);
             settings = profile;
             RebuildUi();
+
+            if (persist)
+            {
+                PersistLastConfigIdentifier($"profile:{profileName}");
+            }
         }
 
         private static MixerSettings GetFallbackProfile(string profileName)
@@ -1269,21 +1293,134 @@ namespace Audio_Mixer
 
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
+            if (!TryReadSettingsFromPath(dialog.FileName, true, out var loaded) || loaded == null)
+            {
+                return;
+            }
+
+            settings = loaded;
+            RebuildUi();
+            PersistLastConfigIdentifier(dialog.FileName);
+        }
+
+        private void MainTabControlOnDrawItem(object? sender, DrawItemEventArgs e)
+        {
+            if (mainTabControl.TabPages.Count <= e.Index) return;
+
+            var tab = mainTabControl.TabPages[e.Index];
+            var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+            var backColor = selected ? SurfaceColor : BackgroundColor;
+            var foreColor = selected ? Color.White : MutedTextColor;
+
+            using var backgroundBrush = new SolidBrush(backColor);
+            e.Graphics.FillRectangle(backgroundBrush, e.Bounds);
+            TextRenderer.DrawText(
+                e.Graphics,
+                tab.Text,
+                Font,
+                e.Bounds,
+                foreColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+
+        // Autoload/LastConfig: Pfad/Identifier wird in %AppData%\Audio_Mixer\last_config.txt gespeichert und beim Start geladen.
+        private static string GetLastConfigPath()
+        {
+            var directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Audio_Mixer");
+            Directory.CreateDirectory(directory);
+            return Path.Combine(directory, "last_config.txt");
+        }
+
+        private void PersistLastConfigIdentifier(string identifier)
+        {
             try
             {
-                var json = File.ReadAllText(dialog.FileName);
-                var loaded = JsonSerializer.Deserialize<MixerSettings>(json);
-                if (loaded != null)
+                File.WriteAllText(GetLastConfigPath(), identifier);
+            }
+            catch
+            {
+            }
+        }
+
+        private bool TryAutoLoadLastConfig()
+        {
+            string? identifier = null;
+            try
+            {
+                var path = GetLastConfigPath();
+                if (File.Exists(path))
                 {
-                    settings = loaded;
-                    RebuildUi();
+                    identifier = File.ReadAllText(path)?.Trim();
                 }
+            }
+            catch
+            {
+            }
+
+            if (string.IsNullOrWhiteSpace(identifier))
+            {
+                return false;
+            }
+
+            if (identifier.StartsWith("profile:", StringComparison.OrdinalIgnoreCase))
+            {
+                var profileName = identifier.Substring("profile:".Length);
+                LoadProfile(profileName, false);
+                return true;
+            }
+
+            if (!TryReadSettingsFromPath(identifier, false, out var loaded))
+            {
+                return false;
+            }
+
+            return ApplyLoadedSettings(loaded);
+        }
+
+        private bool TryReadSettingsFromPath(string path, bool showReadError, out MixerSettings? loaded)
+        {
+            loaded = null;
+            if (!File.Exists(path))
+            {
+                if (showReadError)
+                {
+                    MessageBox.Show(this, "Die Datei konnte nicht gefunden werden.", "Fehler",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                return false;
+            }
+
+            string json;
+            try
+            {
+                json = File.ReadAllText(path);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, $"Einstellungen konnten nicht geladen werden: {ex.Message}", "Fehler",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (showReadError)
+                {
+                    MessageBox.Show(this, $"Einstellungen konnten nicht gelesen werden: {ex.Message}", "Fehler",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                return false;
             }
+
+            loaded = MixerSettings.LoadBestEffort(json, MaxChannels);
+            return true;
+        }
+
+        private bool ApplyLoadedSettings(MixerSettings? loaded)
+        {
+            if (loaded == null)
+            {
+                return false;
+            }
+
+            settings = loaded;
+            RebuildUi();
+            return true;
         }
 
         private sealed class ChannelRow
