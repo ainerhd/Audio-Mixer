@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Drawing;
+using System.Reflection;
 
 namespace Audio_Mixer
 {
@@ -43,6 +44,7 @@ namespace Audio_Mixer
         private Panel channelsScrollPanel = null!;
         private StatusDot statusDot = null!;
         private ContextMenuStrip profileMenu = null!;
+        private Label manualPortHintLabel = null!;
 
         private Color BackgroundColor => Color.FromArgb(settings.BackgroundColorArgb);
         private Color SurfaceColor => Color.FromArgb(settings.SurfaceColorArgb);
@@ -80,6 +82,9 @@ namespace Audio_Mixer
             BackColor = BackgroundColor;
             ForeColor = Color.White;
             Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+            UpdateStyles();
 
             mainTabControl = new TabControl
             {
@@ -88,6 +93,8 @@ namespace Audio_Mixer
                 DrawMode = TabDrawMode.OwnerDrawFixed,
             };
             mainTabControl.DrawItem += MainTabControlOnDrawItem;
+            mainTabControl.Paint += MainTabControlOnPaint;
+            EnableDoubleBuffering(mainTabControl);
             Controls.Add(mainTabControl);
 
             var mixerTab = new TabPage("Mixer")
@@ -285,12 +292,12 @@ namespace Audio_Mixer
             var settingsPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 6,
+                ColumnCount = 5,
                 AutoSize = true,
             };
             for (var i = 0; i < settingsPanel.ColumnCount; i++)
             {
-                settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.6f));
+                settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
             }
             generalContainer.Controls.Add(settingsPanel, 0, 1);
 
@@ -329,29 +336,52 @@ namespace Audio_Mixer
             };
             settingsPanel.Controls.Add(deadzoneUpDown, 3, 0);
 
+            var configPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = SurfaceAccentColor,
+                Padding = new Padding(8, 6, 8, 6),
+                Margin = new Padding(8, 0, 0, 0),
+            };
+            var configLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                AutoSize = true,
+            };
+            configLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            configLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            configPanel.Controls.Add(configLayout);
+
             loadSettingsButton = new Button
             {
                 Text = "Laden",
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
+                BackColor = SurfaceColor,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.White,
+                Margin = new Padding(0, 0, 6, 0),
+                Padding = new Padding(6, 2, 6, 2),
             };
             loadSettingsButton.FlatAppearance.BorderSize = 0;
             loadSettingsButton.Click += (_, _) => LoadSettingsFromFile();
-            settingsPanel.Controls.Add(loadSettingsButton, 4, 0);
+            configLayout.Controls.Add(loadSettingsButton, 0, 0);
 
             saveSettingsButton = new Button
             {
                 Text = "Speichern",
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
+                BackColor = SurfaceColor,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.White,
+                Margin = new Padding(6, 0, 0, 0),
+                Padding = new Padding(6, 2, 6, 2),
             };
             saveSettingsButton.FlatAppearance.BorderSize = 0;
             saveSettingsButton.Click += (_, _) => SaveSettingsToFile();
-            settingsPanel.Controls.Add(saveSettingsButton, 5, 0);
+            configLayout.Controls.Add(saveSettingsButton, 1, 0);
+
+            settingsPanel.Controls.Add(configPanel, 4, 0);
 
             profileMenu = new ContextMenuStrip();
             profileMenu.Items.Add("Gaming", null, (_, _) => LoadProfile("gaming", true));
@@ -393,9 +423,10 @@ namespace Audio_Mixer
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 AutoSize = true,
             };
+            connectionContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             connectionContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             connectionContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             connectionCard.Controls.Add(connectionContainer);
@@ -470,6 +501,16 @@ namespace Audio_Mixer
             manualConnectButton.Click += (_, _) => ConnectManualPort();
             connectionPanel.Controls.Add(manualConnectButton, 3, 0);
 
+            manualPortHintLabel = new Label
+            {
+                Text = "Aktiviere manuelle Portwahl, um einen Port auszuwählen.",
+                AutoSize = true,
+                ForeColor = MutedTextColor,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 6, 0, 0),
+            };
+            connectionContainer.Controls.Add(manualPortHintLabel, 0, 2);
+
             var colorCard = CreateCardPanel();
             colorCard.Margin = new Padding(0, 0, 0, 16);
             root.Controls.Add(colorCard);
@@ -498,15 +539,19 @@ namespace Audio_Mixer
             colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
             colorContainer.Controls.Add(colorPanel, 0, 1);
 
-            AddColorPickerRow(colorPanel, 0, "Hintergrund", () => BackgroundColor,
+            colorPanel.Controls.Add(CreateHeaderLabel("Farbe"), 0, 0);
+            colorPanel.Controls.Add(CreateHeaderLabel("Vorschau"), 1, 0);
+            colorPanel.Controls.Add(CreateHeaderLabel("Aktion"), 2, 0);
+
+            AddColorPickerRow(colorPanel, 1, "Hintergrund", () => BackgroundColor,
                 color => settings.BackgroundColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 1, "Kartenfläche", () => SurfaceColor,
+            AddColorPickerRow(colorPanel, 2, "Kartenfläche", () => SurfaceColor,
                 color => settings.SurfaceColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 2, "Kartenakzent", () => SurfaceAccentColor,
+            AddColorPickerRow(colorPanel, 3, "Kartenakzent", () => SurfaceAccentColor,
                 color => settings.SurfaceAccentColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 3, "Akzent", () => AccentColor,
+            AddColorPickerRow(colorPanel, 4, "Akzentfarbe", () => AccentColor,
                 color => settings.AccentColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 4, "Gedämpfter Text", () => MutedTextColor,
+            AddColorPickerRow(colorPanel, 5, "Gedämpfter Text", () => MutedTextColor,
                 color => settings.MutedTextColorArgb = color.ToArgb());
 
             var channelSizeCard = CreateCardPanel();
@@ -697,7 +742,7 @@ namespace Audio_Mixer
         private void ToggleMute(ChannelRow row)
         {
             row.IsMuted = !row.IsMuted;
-            row.MuteButton.BackColor = row.IsMuted ? AccentColor : SurfaceAccentColor;
+            UpdateMuteUi(row);
 
             var deviceId = settings.Channels.ElementAtOrDefault(row.Index)?.DeviceId;
             if (string.IsNullOrWhiteSpace(deviceId)) return;
@@ -712,6 +757,26 @@ namespace Audio_Mixer
             if (value < 0) value = 0;
             var volume = value / 1023f;
             audioManager.SetDeviceVolume(deviceId, volume);
+        }
+
+        private void UpdateMuteUi(ChannelRow row)
+        {
+            if (row.IsMuted)
+            {
+                row.MuteButton.Text = "Muted";
+                row.MuteButton.BackColor = Color.FromArgb(96, 38, 38);
+                row.MuteButton.ForeColor = Color.White;
+                row.LevelBar.Enabled = false;
+                row.LevelPercentLabel.ForeColor = MutedTextColor;
+            }
+            else
+            {
+                row.MuteButton.Text = "Mute";
+                row.MuteButton.BackColor = SurfaceAccentColor;
+                row.MuteButton.ForeColor = MutedTextColor;
+                row.LevelBar.Enabled = true;
+                row.LevelPercentLabel.ForeColor = MutedTextColor;
+            }
         }
 
         private void LoadProfile(string profileName, bool persist)
@@ -781,6 +846,7 @@ namespace Audio_Mixer
                 BackColor = getColor(),
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 6, 0, 6),
+                BorderStyle = BorderStyle.FixedSingle,
             };
             var button = new Button
             {
@@ -861,6 +927,7 @@ namespace Audio_Mixer
             manualConnectButton.Enabled = manualEnabled;
             refreshPortsButton.Enabled = manualEnabled;
             rescanButton.Enabled = !manualEnabled;
+            manualPortHintLabel.Visible = !manualEnabled;
 
             if (manualEnabled)
             {
@@ -948,32 +1015,51 @@ namespace Audio_Mixer
                     Value = 0,
                     Style = ProgressBarStyle.Continuous,
                 };
+                var levelPercentLabel = new Label
+                {
+                    Text = "0%",
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleRight,
+                    ForeColor = MutedTextColor,
+                    AutoSize = false,
+                };
                 var muteButton = new Button
                 {
                     Text = "Mute",
                     Dock = DockStyle.Fill,
                     BackColor = SurfaceAccentColor,
                     FlatStyle = FlatStyle.Flat,
-                    ForeColor = Color.White,
-                    Margin = new Padding(6, 2, 0, 2),
+                    ForeColor = MutedTextColor,
+                    Margin = new Padding(6, 6, 0, 6),
+                    Padding = new Padding(4, 2, 4, 2),
                 };
                 muteButton.FlatAppearance.BorderSize = 0;
+
+                var progressPanel = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    Padding = new Padding(0, 10, 0, 10),
+                };
+                progressPanel.Controls.Add(progress);
 
                 var levelContainer = new TableLayoutPanel
                 {
                     Dock = DockStyle.Fill,
-                    ColumnCount = 2,
+                    ColumnCount = 3,
                     RowCount = 1,
                 };
                 levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
-                levelContainer.Controls.Add(progress, 0, 0);
-                levelContainer.Controls.Add(muteButton, 1, 0);
+                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
+                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+                levelContainer.Controls.Add(progressPanel, 0, 0);
+                levelContainer.Controls.Add(levelPercentLabel, 1, 0);
+                levelContainer.Controls.Add(muteButton, 2, 0);
                 channelsTable.Controls.Add(CreateCellPanel(levelContainer, rowBackground), 2, rowIndex);
 
-                var row = new ChannelRow(i, deviceCombo, progress, muteButton);
+                var row = new ChannelRow(i, deviceCombo, progress, levelPercentLabel, muteButton);
                 muteButton.Click += (_, _) => ToggleMute(row);
                 channelRows.Add(row);
+                UpdateMuteUi(row);
             }
 
             channelsTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
@@ -1252,6 +1338,7 @@ namespace Audio_Mixer
 
                     lastValues[i] = value;
                     channelRows[i].LevelBar.Value = value;
+                    channelRows[i].LevelPercentLabel.Text = $"{Math.Round(value / 1023f * 100):0}%";
 
                     var deviceId = settings.Channels.ElementAtOrDefault(i)?.DeviceId;
                     if (!string.IsNullOrWhiteSpace(deviceId))
@@ -1321,6 +1408,25 @@ namespace Audio_Mixer
                 e.Bounds,
                 foreColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+            if (selected)
+            {
+                using var accentPen = new Pen(AccentColor, 2f);
+                var underlineY = e.Bounds.Bottom - 2;
+                e.Graphics.DrawLine(accentPen, e.Bounds.Left + 6, underlineY, e.Bounds.Right - 6, underlineY);
+            }
+        }
+
+        private void MainTabControlOnPaint(object? sender, PaintEventArgs e)
+        {
+            using var brush = new SolidBrush(BackgroundColor);
+            e.Graphics.FillRectangle(brush, mainTabControl.ClientRectangle);
+        }
+
+        private static void EnableDoubleBuffering(Control control)
+        {
+            typeof(Control).GetProperty("DoubleBuffered", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?.SetValue(control, true, null);
         }
 
         // Autoload/LastConfig: Pfad/Identifier wird in %AppData%\Audio_Mixer\last_config.txt gespeichert und beim Start geladen.
@@ -1425,17 +1531,19 @@ namespace Audio_Mixer
 
         private sealed class ChannelRow
         {
-            public ChannelRow(int index, ComboBox deviceComboBox, ProgressBar levelBar, Button muteButton)
+            public ChannelRow(int index, ComboBox deviceComboBox, ProgressBar levelBar, Label levelPercentLabel, Button muteButton)
             {
                 Index = index;
                 DeviceComboBox = deviceComboBox;
                 LevelBar = levelBar;
+                LevelPercentLabel = levelPercentLabel;
                 MuteButton = muteButton;
             }
 
             public int Index { get; }
             public ComboBox DeviceComboBox { get; }
             public ProgressBar LevelBar { get; }
+            public Label LevelPercentLabel { get; }
             public Button MuteButton { get; }
             public bool IsMuted { get; set; }
         }
