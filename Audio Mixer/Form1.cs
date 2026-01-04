@@ -9,6 +9,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Drawing;
 using System.Reflection;
+using Audio_Mixer.Core;
+using Audio_Mixer.UI;
 
 namespace Audio_Mixer
 {
@@ -19,11 +21,15 @@ namespace Audio_Mixer
         private readonly CoreAudioManager audioManager = new();
         private readonly List<ChannelRow> channelRows = new();
         private readonly List<AudioDeviceItem> audioDevices = new();
+        private readonly AppSettingsStore appSettingsStore = new();
+        private readonly AppState appState = new(MixerSettings.CreateDefault());
 
         private CancellationTokenSource? scanCts;
         private SerialPort? serialPort;
         private int[] lastValues = Array.Empty<int>();
         private MixerSettings settings = MixerSettings.CreateDefault();
+        private AppSettings appSettings = new();
+        private UiTheme theme = UiTheme.FromSettings(MixerSettings.CreateDefault());
         private bool isApplyingSettings;
 
         private Panel topBar = null!;
@@ -52,13 +58,10 @@ namespace Audio_Mixer
         private StatusDot statusDot = null!;
         private ContextMenuStrip profileMenu = null!;
         private Label manualPortHintLabel = null!;
-
-        private Color ThemeBack => Color.FromArgb(settings.BackgroundColorArgb);
-        private Color ThemeSurface => Color.FromArgb(settings.SurfaceColorArgb);
-        private Color ThemeSurface2 => Color.FromArgb(settings.SurfaceAccentColorArgb);
-        private Color ThemeAccent => Color.FromArgb(settings.AccentColorArgb);
-        private Color ThemeText => Color.White;
-        private Color ThemeMutedText => Color.FromArgb(settings.MutedTextColorArgb);
+        private Label noticeLabel = null!;
+        private Button noticeDismissButton = null!;
+        private Panel noticePanel = null!;
+        private Button presetsButton = null!;
 
         private readonly ToolTip deviceToolTip = new() { ShowAlways = true };
         private StatusState statusState = StatusState.Idle;
@@ -67,6 +70,7 @@ namespace Audio_Mixer
         public Form1()
         {
             InitializeComponent();
+            appSettings = appSettingsStore.Load();
             BuildUi();
             UpdateDevices();
             if (!TryAutoLoadLastConfig())
@@ -82,15 +86,18 @@ namespace Audio_Mixer
             scanCts?.Cancel();
             CloseSerialPort();
             audioManager.Dispose();
+            appSettings.LastConfigIdentifier ??= appState.LastConfigIdentifier;
+            appSettingsStore.Save(appSettings);
         }
 
         private void BuildUi()
         {
+            theme = UiTheme.FromSettings(settings);
             Text = "Audio Mixer";
             MinimumSize = new Size(720, 480);
-            BackColor = ThemeBack;
-            ForeColor = ThemeText;
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+            BackColor = theme.Background;
+            ForeColor = theme.Text;
+            Font = theme.BaseFont;
             DoubleBuffered = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
             UpdateStyles();
@@ -100,30 +107,31 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 2,
-                BackColor = ThemeBack,
+                BackColor = theme.Background,
             };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             Controls.Add(root);
 
+            profileMenu = BuildPresetMenu();
             BuildTopBar(root);
 
             contentPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeBack,
+                BackColor = theme.Background,
             };
             root.Controls.Add(contentPanel, 0, 1);
 
             mixerViewPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeBack,
+                BackColor = theme.Background,
             };
             settingsViewPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeBack,
+                BackColor = theme.Background,
                 Visible = false,
             };
             contentPanel.Controls.Add(mixerViewPanel);
@@ -140,26 +148,102 @@ namespace Audio_Mixer
             topBar = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface,
+                BackColor = theme.Surface,
                 Padding = new Padding(20, 10, 20, 8),
             };
             root.Controls.Add(topBar, 0, 0);
 
+            var topLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                RowCount = 1,
+                BackColor = theme.Surface,
+            };
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            topBar.Controls.Add(topLayout);
+
             var navLayout = new FlowLayoutPanel
             {
-                Dock = DockStyle.Left,
+                Dock = DockStyle.Fill,
                 AutoSize = true,
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = false,
                 Margin = new Padding(0),
             };
-            topBar.Controls.Add(navLayout);
+            topLayout.Controls.Add(navLayout, 0, 0);
 
             navLayout.Controls.Add(CreateNavItem("Mixer", out mixerNavButton, out mixerNavUnderline));
             navLayout.Controls.Add(CreateNavItem("Einstellungen", out settingsNavButton, out settingsNavUnderline));
 
             mixerNavButton.Click += (_, _) => SetActiveView(ViewKind.Mixer);
             settingsNavButton.Click += (_, _) => SetActiveView(ViewKind.Settings);
+
+            var actionsPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+            };
+            topLayout.Controls.Add(actionsPanel, 2, 0);
+
+            presetsButton = new Button
+            {
+                Text = "Presets ▾",
+                AutoSize = true,
+                BackColor = theme.SurfaceAlt,
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = theme.Text,
+                Margin = new Padding(8, 0, 0, 0),
+                Padding = new Padding(10, 6, 10, 6),
+            };
+            presetsButton.FlatAppearance.BorderSize = 0;
+            presetsButton.Click += (_, _) => profileMenu.Show(presetsButton, new Point(0, presetsButton.Height));
+            actionsPanel.Controls.Add(presetsButton);
+
+            noticePanel = new Panel
+            {
+                AutoSize = true,
+                BackColor = theme.WarningBackground,
+                Padding = new Padding(8, 4, 8, 4),
+                Visible = false,
+                Margin = new Padding(0, 0, 6, 0),
+            };
+            var noticeLayout = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+            };
+            noticeLabel = new Label
+            {
+                AutoSize = true,
+                ForeColor = theme.WarningText,
+                Text = string.Empty,
+                Margin = new Padding(0, 2, 6, 0),
+            };
+            noticeDismissButton = new Button
+            {
+                Text = "✕",
+                AutoSize = true,
+                BackColor = theme.WarningBackground,
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = theme.WarningText,
+                Margin = new Padding(0),
+                Padding = new Padding(4, 0, 4, 0),
+            };
+            noticeDismissButton.FlatAppearance.BorderSize = 0;
+            noticeDismissButton.Click += (_, _) => HideNotice();
+            noticeLayout.Controls.Add(noticeLabel);
+            noticeLayout.Controls.Add(noticeDismissButton);
+            noticePanel.Controls.Add(noticeLayout);
+            actionsPanel.Controls.Add(noticePanel);
         }
 
         private Control CreateNavItem(string text, out Button button, out Panel underline)
@@ -178,9 +262,9 @@ namespace Audio_Mixer
             {
                 Text = text,
                 AutoSize = true,
-                BackColor = ThemeSurface,
+                BackColor = theme.Surface,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeMutedText,
+                ForeColor = theme.MutedText,
                 Padding = new Padding(12, 6, 12, 6),
                 Margin = new Padding(0),
             };
@@ -190,7 +274,7 @@ namespace Audio_Mixer
             underline = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeAccent,
+                BackColor = theme.Accent,
                 Visible = false,
                 Margin = new Padding(0),
             };
@@ -212,8 +296,8 @@ namespace Audio_Mixer
 
         private void UpdateNavState(Button button, Panel underline, bool isActive)
         {
-            button.BackColor = isActive ? ThemeSurface2 : ThemeSurface;
-            button.ForeColor = isActive ? ThemeText : ThemeMutedText;
+            button.BackColor = isActive ? theme.SurfaceAlt : theme.Surface;
+            button.ForeColor = isActive ? theme.Text : theme.MutedText;
             underline.Visible = isActive;
         }
 
@@ -224,7 +308,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 2,
-                Padding = new Padding(20),
+                Padding = theme.PagePadding,
             };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -254,10 +338,10 @@ namespace Audio_Mixer
             var titleLabel = new Label
             {
                 Text = "Mixer Verbindung",
-                Font = new Font("Segoe UI Semibold", 14f, FontStyle.Bold),
+                Font = theme.HeaderFont,
                 AutoSize = true,
                 Dock = DockStyle.Fill,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
             };
             headerPanel.Controls.Add(titleLabel, 0, 0);
 
@@ -279,7 +363,7 @@ namespace Audio_Mixer
             {
                 Text = "Status: Nicht verbunden",
                 AutoSize = true,
-                ForeColor = ThemeMutedText,
+                ForeColor = theme.MutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Dock = DockStyle.Fill,
             };
@@ -304,6 +388,20 @@ namespace Audio_Mixer
             headerPanel.Controls.Add(actionPanel, 2, 0);
         }
 
+        private ContextMenuStrip BuildPresetMenu()
+        {
+            var menu = new ContextMenuStrip();
+            foreach (var preset in appState.Presets)
+            {
+                menu.Items.Add(preset.Name, null, (_, _) => LoadPreset(preset));
+            }
+
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Aus Datei laden...", null, (_, _) => LoadSettingsFromFile());
+            menu.Items.Add("Aktuelle Einstellungen speichern...", null, (_, _) => SaveSettingsToFile());
+            return menu;
+        }
+
         private void BuildChannelContainer(TableLayoutPanel root)
         {
             var channelsCard = CreateCardPanel();
@@ -324,9 +422,9 @@ namespace Audio_Mixer
             {
                 Text = "Kanäle & Pegel",
                 AutoSize = true,
-                Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
+                Font = theme.SectionFont,
                 Margin = new Padding(0, 0, 0, 8),
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
             };
             channelsContainer.Controls.Add(channelsHeader, 0, 0);
 
@@ -368,7 +466,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 4,
-                Padding = new Padding(20),
+                Padding = theme.PagePadding,
             };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -414,8 +512,8 @@ namespace Audio_Mixer
                 Maximum = MaxChannels,
                 Value = settings.ChannelCount,
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
-                ForeColor = ThemeText,
+                BackColor = theme.SurfaceAlt,
+                ForeColor = theme.Text,
             };
             channelCountUpDown.ValueChanged += (_, _) =>
             {
@@ -432,8 +530,8 @@ namespace Audio_Mixer
                 Maximum = 200,
                 Value = settings.Deadzone,
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
-                ForeColor = ThemeText,
+                BackColor = theme.SurfaceAlt,
+                ForeColor = theme.Text,
             };
             deadzoneUpDown.ValueChanged += (_, _) =>
             {
@@ -445,7 +543,7 @@ namespace Audio_Mixer
             var configPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
+                BackColor = theme.SurfaceAlt,
                 Padding = new Padding(8, 6, 8, 6),
                 Margin = new Padding(8, 0, 0, 0),
             };
@@ -463,9 +561,9 @@ namespace Audio_Mixer
             {
                 Text = "Laden",
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface,
+                BackColor = theme.Surface,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
                 Margin = new Padding(0, 0, 6, 0),
                 Padding = new Padding(6, 2, 6, 2),
             };
@@ -477,9 +575,9 @@ namespace Audio_Mixer
             {
                 Text = "Speichern",
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface,
+                BackColor = theme.Surface,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
                 Margin = new Padding(6, 0, 0, 0),
                 Padding = new Padding(6, 2, 6, 2),
             };
@@ -489,37 +587,14 @@ namespace Audio_Mixer
 
             settingsPanel.Controls.Add(configPanel, 4, 0);
 
-            profileMenu = new ContextMenuStrip();
-            profileMenu.Items.Add("Gaming", null, (_, _) => LoadProfile("gaming", true));
-            profileMenu.Items.Add("Streaming", null, (_, _) => LoadProfile("streaming", true));
-            profileMenu.Items.Add("Office", null, (_, _) => LoadProfile("office", true));
-            profileMenu.Items.Add(new ToolStripSeparator());
-            profileMenu.Items.Add("Aus Datei laden...", null, (_, _) => LoadSettingsFromFile());
-            profileMenu.Items.Add("Aktuelle Einstellungen speichern...", null, (_, _) => SaveSettingsToFile());
-
-            var profileButton = new Button
+            var presetsHint = new Label
             {
-                Text = "Profile ▾",
+                Text = "Presets sind oben rechts verfügbar und können jederzeit gewechselt werden.",
                 AutoSize = true,
-                BackColor = ThemeAccent,
-                FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.MutedText,
                 Margin = new Padding(0, 8, 0, 0),
-                Padding = new Padding(8, 4, 8, 4),
             };
-            profileButton.FlatAppearance.BorderSize = 0;
-            profileButton.Click += (_, _) => profileMenu.Show(profileButton, new Point(0, profileButton.Height));
-
-            var profilePanel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                AutoSize = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                Margin = new Padding(0),
-            };
-            profilePanel.Controls.Add(profileButton);
-            generalContainer.Controls.Add(profilePanel, 0, 2);
+            generalContainer.Controls.Add(presetsHint, 0, 2);
 
             var connectionCard = CreateCardPanel();
             connectionCard.Margin = new Padding(0, 0, 0, 16);
@@ -555,7 +630,7 @@ namespace Audio_Mixer
             {
                 Text = "Manuelle Portwahl aktivieren",
                 Dock = DockStyle.Fill,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
                 AutoSize = true,
             };
             manualPortCheckBox.CheckedChanged += (_, _) =>
@@ -570,8 +645,8 @@ namespace Audio_Mixer
             {
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = ThemeSurface2,
-                ForeColor = ThemeText,
+                BackColor = theme.SurfaceAlt,
+                ForeColor = theme.Text,
                 FlatStyle = FlatStyle.Flat,
             };
             manualPortComboBox.SelectedIndexChanged += (_, _) =>
@@ -587,9 +662,9 @@ namespace Audio_Mixer
             {
                 Text = "Ports aktualisieren",
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
+                BackColor = theme.SurfaceAlt,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
             };
             refreshPortsButton.FlatAppearance.BorderSize = 0;
             refreshPortsButton.Click += (_, _) => PopulatePortList();
@@ -599,9 +674,9 @@ namespace Audio_Mixer
             {
                 Text = "Verbinden",
                 Dock = DockStyle.Fill,
-                BackColor = ThemeAccent,
+                BackColor = theme.Accent,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
             };
             manualConnectButton.FlatAppearance.BorderSize = 0;
             manualConnectButton.Click += (_, _) => ConnectManualPort();
@@ -611,7 +686,7 @@ namespace Audio_Mixer
             {
                 Text = "Aktiviere manuelle Portwahl, um einen Port auszuwählen.",
                 AutoSize = true,
-                ForeColor = ThemeMutedText,
+                ForeColor = theme.MutedText,
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 6, 0, 0),
             };
@@ -649,15 +724,15 @@ namespace Audio_Mixer
             colorPanel.Controls.Add(CreateHeaderLabel("Vorschau"), 1, 0);
             colorPanel.Controls.Add(CreateHeaderLabel("Aktion"), 2, 0);
 
-            AddColorPickerRow(colorPanel, 1, "Hintergrund", () => ThemeBack,
+            AddColorPickerRow(colorPanel, 1, "Hintergrund", () => theme.Background,
                 color => settings.BackgroundColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 2, "Kartenfläche", () => ThemeSurface,
+            AddColorPickerRow(colorPanel, 2, "Kartenfläche", () => theme.Surface,
                 color => settings.SurfaceColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 3, "Kartenakzent", () => ThemeSurface2,
+            AddColorPickerRow(colorPanel, 3, "Kartenakzent", () => theme.SurfaceAlt,
                 color => settings.SurfaceAccentColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 4, "Akzentfarbe", () => ThemeAccent,
+            AddColorPickerRow(colorPanel, 4, "Akzentfarbe", () => theme.Accent,
                 color => settings.AccentColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 5, "Gedämpfter Text", () => ThemeMutedText,
+            AddColorPickerRow(colorPanel, 5, "Gedämpfter Text", () => theme.MutedText,
                 color => settings.MutedTextColorArgb = color.ToArgb());
 
             var channelSizeCard = CreateCardPanel();
@@ -695,8 +770,8 @@ namespace Audio_Mixer
                 Maximum = 120,
                 Value = settings.ChannelRowHeight,
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
-                ForeColor = ThemeText,
+                BackColor = theme.SurfaceAlt,
+                ForeColor = theme.Text,
             };
             channelRowHeightUpDown.ValueChanged += (_, _) =>
             {
@@ -713,8 +788,8 @@ namespace Audio_Mixer
                 Maximum = 240,
                 Value = settings.ChannelLabelWidth,
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
-                ForeColor = ThemeText,
+                BackColor = theme.SurfaceAlt,
+                ForeColor = theme.Text,
             };
             channelLabelWidthUpDown.ValueChanged += (_, _) =>
             {
@@ -731,7 +806,7 @@ namespace Audio_Mixer
             {
                 Text = text,
                 Dock = DockStyle.Fill,
-                ForeColor = ThemeMutedText,
+                ForeColor = theme.MutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoSize = true,
             };
@@ -743,8 +818,8 @@ namespace Audio_Mixer
             {
                 Text = text,
                 Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
-                ForeColor = ThemeText,
+                Font = theme.SectionFont,
+                ForeColor = theme.Text,
                 AutoSize = true,
             };
         }
@@ -754,8 +829,8 @@ namespace Audio_Mixer
             return new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface,
-                Padding = new Padding(16),
+                BackColor = theme.Surface,
+                Padding = theme.CardPadding,
             };
         }
 
@@ -765,9 +840,9 @@ namespace Audio_Mixer
             {
                 Text = text,
                 AutoSize = true,
-                BackColor = ThemeAccent,
+                BackColor = theme.Accent,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
                 Margin = new Padding(4, 0, 0, 0),
                 Padding = new Padding(8, 4, 8, 4),
             };
@@ -816,6 +891,32 @@ namespace Audio_Mixer
                 statusDot.DotColor = GetStatusColor(state);
                 statusDot.Invalidate();
             }
+        }
+
+        private void HandleConfigWarnings(ConfigLoadResult result, string sourceLabel)
+        {
+            if (result.HasWarnings)
+            {
+                ConfigLogger.LogWarnings(sourceLabel, result.Warnings);
+                ShowNotice("Config teilweise geladen. Details im Log.");
+            }
+            else
+            {
+                HideNotice();
+            }
+        }
+
+        private void ShowNotice(string message)
+        {
+            if (noticePanel == null || noticeLabel == null) return;
+            noticeLabel.Text = message;
+            noticePanel.Visible = true;
+        }
+
+        private void HideNotice()
+        {
+            if (noticePanel == null) return;
+            noticePanel.Visible = false;
         }
 
         private void UpdateDeviceToolTip(ComboBox comboBox)
@@ -872,17 +973,17 @@ namespace Audio_Mixer
             {
                 row.MuteButton.Text = "Muted";
                 row.MuteButton.BackColor = Color.FromArgb(96, 38, 38);
-                row.MuteButton.ForeColor = ThemeText;
-                row.LevelPercentLabel.ForeColor = ThemeMutedText;
+                row.MuteButton.ForeColor = theme.Text;
+                row.LevelPercentLabel.ForeColor = theme.MutedText;
                 row.LevelFill.BackColor = Color.FromArgb(72, 72, 72);
             }
             else
             {
                 row.MuteButton.Text = "Mute";
-                row.MuteButton.BackColor = ThemeSurface2;
-                row.MuteButton.ForeColor = ThemeText;
-                row.LevelPercentLabel.ForeColor = ThemeMutedText;
-                row.LevelFill.BackColor = ThemeAccent;
+                row.MuteButton.BackColor = theme.SurfaceAlt;
+                row.MuteButton.ForeColor = theme.Text;
+                row.LevelPercentLabel.ForeColor = theme.MutedText;
+                row.LevelFill.BackColor = theme.Accent;
             }
         }
 
@@ -890,19 +991,40 @@ namespace Audio_Mixer
         {
             var profilePath = Path.Combine(AppContext.BaseDirectory, $"{profileName}.json");
             MixerSettings? profile = null;
+            ConfigLoadResult? loadResult = null;
 
-            if (TryReadSettingsFromPath(profilePath, false, out var loaded))
+            if (TryReadSettingsFromPath(profilePath, false, out var result))
             {
-                profile = loaded;
+                profile = result?.Settings;
+                loadResult = result;
             }
 
             profile ??= GetFallbackProfile(profileName);
             settings = profile;
             RebuildUi();
+            if (loadResult != null)
+            {
+                HandleConfigWarnings(loadResult, $"Preset {profileName}");
+            }
 
             if (persist)
             {
                 PersistLastConfigIdentifier($"profile:{profileName}");
+            }
+        }
+
+        private void LoadPreset(PresetDefinition preset)
+        {
+            if (preset.Identifier.StartsWith("profile:", StringComparison.OrdinalIgnoreCase))
+            {
+                var profileName = preset.Identifier.Substring("profile:".Length);
+                LoadProfile(profileName, true);
+                return;
+            }
+
+            if (TryReadSettingsFromPath(preset.Identifier, false, out var result) && result != null)
+            {
+                ApplyLoadedSettings(result);
             }
         }
 
@@ -918,13 +1040,13 @@ namespace Audio_Mixer
             };
         }
 
-        private static Panel CreateCellPanel(Control content, Color backColor)
+        private Panel CreateCellPanel(Control content, Color backColor)
         {
             var panel = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = backColor,
-                Padding = new Padding(8, 6, 8, 6),
+                Padding = theme.CompactPadding,
             };
             content.Dock = DockStyle.Fill;
             panel.Controls.Add(content);
@@ -937,8 +1059,8 @@ namespace Audio_Mixer
             {
                 Text = text,
                 Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-                ForeColor = ThemeMutedText,
+                Font = theme.LabelFont,
+                ForeColor = theme.MutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
             };
         }
@@ -959,9 +1081,9 @@ namespace Audio_Mixer
             {
                 Text = "Farbe wählen",
                 Dock = DockStyle.Fill,
-                BackColor = ThemeSurface2,
+                BackColor = theme.SurfaceAlt,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = ThemeText,
+                ForeColor = theme.Text,
             };
             button.FlatAppearance.BorderSize = 0;
             button.Click += (_, _) =>
@@ -1078,7 +1200,7 @@ namespace Audio_Mixer
             for (var i = 0; i < count; i++)
             {
                 var rowIndex = i;
-                var rowBackground = i % 2 == 0 ? ThemeSurface2 : ThemeSurface;
+                var rowBackground = i % 2 == 0 ? theme.SurfaceAlt : theme.Surface;
                 channelsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, settings.ChannelRowHeight));
 
                 var label = new Label
@@ -1086,7 +1208,7 @@ namespace Audio_Mixer
                     Text = $"Kanal {i + 1}",
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleLeft,
-                    ForeColor = ThemeText,
+                    ForeColor = theme.Text,
                 };
                 channelsTable.Controls.Add(CreateCellPanel(label, rowBackground), 0, rowIndex);
 
@@ -1094,8 +1216,8 @@ namespace Audio_Mixer
                 {
                     Dock = DockStyle.Fill,
                     DropDownStyle = ComboBoxStyle.DropDownList,
-                    BackColor = ThemeSurface,
-                    ForeColor = ThemeText,
+                    BackColor = theme.Surface,
+                    ForeColor = theme.Text,
                     FlatStyle = FlatStyle.Flat,
                 };
 
@@ -1116,14 +1238,14 @@ namespace Audio_Mixer
                 var progressTrack = new Panel
                 {
                     Dock = DockStyle.Fill,
-                    BackColor = ThemeSurface2,
+                    BackColor = theme.SurfaceAlt,
                     Padding = new Padding(2),
                     Margin = new Padding(0),
                 };
                 var progressFill = new Panel
                 {
                     Dock = DockStyle.Left,
-                    BackColor = ThemeAccent,
+                    BackColor = theme.Accent,
                     Width = 0,
                 };
                 progressTrack.Controls.Add(progressFill);
@@ -1133,7 +1255,7 @@ namespace Audio_Mixer
                     Text = "0%",
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleRight,
-                    ForeColor = ThemeMutedText,
+                    ForeColor = theme.MutedText,
                     AutoSize = false,
                 };
                 var muteButton = new Button
@@ -1141,9 +1263,9 @@ namespace Audio_Mixer
                     Text = "Mute",
                     Dock = DockStyle.Fill,
                     MinimumSize = new Size(72, 24),
-                    BackColor = ThemeSurface2,
+                    BackColor = theme.SurfaceAlt,
                     FlatStyle = FlatStyle.Flat,
-                    ForeColor = ThemeText,
+                    ForeColor = theme.Text,
                     Margin = new Padding(6, 6, 6, 6),
                     Padding = new Padding(4, 2, 4, 2),
                 };
@@ -1214,6 +1336,7 @@ namespace Audio_Mixer
         private void ApplySettings(MixerSettings newSettings)
         {
             settings = newSettings;
+            appState.ApplySettings(newSettings);
 
             if (settings.ChannelCount < 1) settings.ChannelCount = 1;
             if (settings.ChannelCount > MaxChannels) settings.ChannelCount = MaxChannels;
@@ -1484,6 +1607,7 @@ namespace Audio_Mixer
 
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(dialog.FileName, json);
+            PersistLastConfigIdentifier(dialog.FileName);
         }
 
         private void LoadSettingsFromFile()
@@ -1495,14 +1619,15 @@ namespace Audio_Mixer
 
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
-            if (!TryReadSettingsFromPath(dialog.FileName, true, out var loaded) || loaded == null)
+            if (!TryReadSettingsFromPath(dialog.FileName, true, out var result) || result == null)
             {
                 return;
             }
 
-            settings = loaded;
+            settings = result.Settings;
             RebuildUi();
             PersistLastConfigIdentifier(dialog.FileName);
+            HandleConfigWarnings(result, Path.GetFileName(dialog.FileName));
         }
 
         private static void EnableDoubleBuffering(Control control)
@@ -1511,41 +1636,16 @@ namespace Audio_Mixer
                 ?.SetValue(control, true, null);
         }
 
-        // Autoload/LastConfig: Pfad/Identifier wird in %AppData%\Audio_Mixer\last_config.txt gespeichert und beim Start geladen.
-        private static string GetLastConfigPath()
-        {
-            var directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Audio_Mixer");
-            Directory.CreateDirectory(directory);
-            return Path.Combine(directory, "last_config.txt");
-        }
-
         private void PersistLastConfigIdentifier(string identifier)
         {
-            try
-            {
-                File.WriteAllText(GetLastConfigPath(), identifier);
-            }
-            catch
-            {
-            }
+            appSettings.LastConfigIdentifier = identifier;
+            appState.SetLastConfigIdentifier(identifier);
+            appSettingsStore.Save(appSettings);
         }
 
         private bool TryAutoLoadLastConfig()
         {
-            string? identifier = null;
-            try
-            {
-                var path = GetLastConfigPath();
-                if (File.Exists(path))
-                {
-                    identifier = File.ReadAllText(path)?.Trim();
-                }
-            }
-            catch
-            {
-            }
+            var identifier = appSettings.LastConfigIdentifier;
 
             if (string.IsNullOrWhiteSpace(identifier))
             {
@@ -1567,9 +1667,9 @@ namespace Audio_Mixer
             return ApplyLoadedSettings(loaded);
         }
 
-        private bool TryReadSettingsFromPath(string path, bool showReadError, out MixerSettings? loaded)
+        private bool TryReadSettingsFromPath(string path, bool showReadError, out ConfigLoadResult? result)
         {
-            loaded = null;
+            result = null;
             if (!File.Exists(path))
             {
                 if (showReadError)
@@ -1595,19 +1695,20 @@ namespace Audio_Mixer
                 return false;
             }
 
-            loaded = MixerSettings.LoadBestEffort(json, MaxChannels);
+            result = MixerSettings.LoadBestEffort(json, MaxChannels);
             return true;
         }
 
-        private bool ApplyLoadedSettings(MixerSettings? loaded)
+        private bool ApplyLoadedSettings(ConfigLoadResult? result)
         {
-            if (loaded == null)
+            if (result == null)
             {
                 return false;
             }
 
-            settings = loaded;
+            settings = result.Settings;
             RebuildUi();
+            HandleConfigWarnings(result, "Aktuelle Konfiguration");
             return true;
         }
 
