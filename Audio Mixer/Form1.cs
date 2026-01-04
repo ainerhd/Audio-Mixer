@@ -26,7 +26,14 @@ namespace Audio_Mixer
         private MixerSettings settings = MixerSettings.CreateDefault();
         private bool isApplyingSettings;
 
-        private TabControl mainTabControl = null!;
+        private Panel topBar = null!;
+        private Button mixerNavButton = null!;
+        private Button settingsNavButton = null!;
+        private Panel mixerNavUnderline = null!;
+        private Panel settingsNavUnderline = null!;
+        private Panel contentPanel = null!;
+        private Panel mixerViewPanel = null!;
+        private Panel settingsViewPanel = null!;
         private Label statusLabel = null!;
         private Button rescanButton = null!;
         private NumericUpDown channelCountUpDown = null!;
@@ -46,14 +53,16 @@ namespace Audio_Mixer
         private ContextMenuStrip profileMenu = null!;
         private Label manualPortHintLabel = null!;
 
-        private Color BackgroundColor => Color.FromArgb(settings.BackgroundColorArgb);
-        private Color SurfaceColor => Color.FromArgb(settings.SurfaceColorArgb);
-        private Color SurfaceAccentColor => Color.FromArgb(settings.SurfaceAccentColorArgb);
-        private Color AccentColor => Color.FromArgb(settings.AccentColorArgb);
-        private Color MutedTextColor => Color.FromArgb(settings.MutedTextColorArgb);
+        private Color ThemeBack => Color.FromArgb(settings.BackgroundColorArgb);
+        private Color ThemeSurface => Color.FromArgb(settings.SurfaceColorArgb);
+        private Color ThemeSurface2 => Color.FromArgb(settings.SurfaceAccentColorArgb);
+        private Color ThemeAccent => Color.FromArgb(settings.AccentColorArgb);
+        private Color ThemeText => Color.White;
+        private Color ThemeMutedText => Color.FromArgb(settings.MutedTextColorArgb);
 
         private readonly ToolTip deviceToolTip = new() { ShowAlways = true };
         private StatusState statusState = StatusState.Idle;
+        private ViewKind currentView = ViewKind.Mixer;
 
         public Form1()
         {
@@ -79,43 +88,136 @@ namespace Audio_Mixer
         {
             Text = "Audio Mixer";
             MinimumSize = new Size(720, 480);
-            BackColor = BackgroundColor;
-            ForeColor = Color.White;
+            BackColor = ThemeBack;
+            ForeColor = ThemeText;
             Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
             DoubleBuffered = true;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
             UpdateStyles();
 
-            mainTabControl = new TabControl
+            var root = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                BackColor = BackgroundColor,
-                DrawMode = TabDrawMode.OwnerDrawFixed,
+                ColumnCount = 1,
+                RowCount = 2,
+                BackColor = ThemeBack,
             };
-            mainTabControl.DrawItem += MainTabControlOnDrawItem;
-            mainTabControl.Paint += MainTabControlOnPaint;
-            EnableDoubleBuffering(mainTabControl);
-            Controls.Add(mainTabControl);
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            Controls.Add(root);
 
-            var mixerTab = new TabPage("Mixer")
+            BuildTopBar(root);
+
+            contentPanel = new Panel
             {
-                BackColor = BackgroundColor,
-                ForeColor = Color.White,
+                Dock = DockStyle.Fill,
+                BackColor = ThemeBack,
             };
-            mainTabControl.TabPages.Add(mixerTab);
+            root.Controls.Add(contentPanel, 0, 1);
 
-            var settingsTab = new TabPage("Einstellungen")
+            mixerViewPanel = new Panel
             {
-                BackColor = BackgroundColor,
-                ForeColor = Color.White,
+                Dock = DockStyle.Fill,
+                BackColor = ThemeBack,
             };
-            mainTabControl.TabPages.Add(settingsTab);
+            settingsViewPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = ThemeBack,
+                Visible = false,
+            };
+            contentPanel.Controls.Add(mixerViewPanel);
+            contentPanel.Controls.Add(settingsViewPanel);
 
-            BuildMixerTabContent(mixerTab);
-            BuildSettingsTabContent(settingsTab);
+            BuildMixerTabContent(mixerViewPanel);
+            BuildSettingsTabContent(settingsViewPanel);
+
+            SetActiveView(currentView);
         }
 
-        private void BuildMixerTabContent(TabPage tab)
+        private void BuildTopBar(TableLayoutPanel root)
+        {
+            topBar = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = ThemeSurface,
+                Padding = new Padding(20, 10, 20, 8),
+            };
+            root.Controls.Add(topBar, 0, 0);
+
+            var navLayout = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Left,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+            };
+            topBar.Controls.Add(navLayout);
+
+            navLayout.Controls.Add(CreateNavItem("Mixer", out mixerNavButton, out mixerNavUnderline));
+            navLayout.Controls.Add(CreateNavItem("Einstellungen", out settingsNavButton, out settingsNavUnderline));
+
+            mixerNavButton.Click += (_, _) => SetActiveView(ViewKind.Mixer);
+            settingsNavButton.Click += (_, _) => SetActiveView(ViewKind.Settings);
+        }
+
+        private Control CreateNavItem(string text, out Button button, out Panel underline)
+        {
+            var container = new TableLayoutPanel
+            {
+                AutoSize = true,
+                ColumnCount = 1,
+                RowCount = 2,
+                Margin = new Padding(0, 0, 12, 0),
+            };
+            container.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            container.RowStyles.Add(new RowStyle(SizeType.Absolute, 2));
+
+            button = new Button
+            {
+                Text = text,
+                AutoSize = true,
+                BackColor = ThemeSurface,
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = ThemeMutedText,
+                Padding = new Padding(12, 6, 12, 6),
+                Margin = new Padding(0),
+            };
+            button.FlatAppearance.BorderSize = 0;
+            container.Controls.Add(button, 0, 0);
+
+            underline = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = ThemeAccent,
+                Visible = false,
+                Margin = new Padding(0),
+            };
+            container.Controls.Add(underline, 0, 1);
+
+            return container;
+        }
+
+        private void SetActiveView(ViewKind view)
+        {
+            currentView = view;
+            var isMixer = view == ViewKind.Mixer;
+            mixerViewPanel.Visible = isMixer;
+            settingsViewPanel.Visible = !isMixer;
+
+            UpdateNavState(mixerNavButton, mixerNavUnderline, isMixer);
+            UpdateNavState(settingsNavButton, settingsNavUnderline, !isMixer);
+        }
+
+        private void UpdateNavState(Button button, Panel underline, bool isActive)
+        {
+            button.BackColor = isActive ? ThemeSurface2 : ThemeSurface;
+            button.ForeColor = isActive ? ThemeText : ThemeMutedText;
+            underline.Visible = isActive;
+        }
+
+        private void BuildMixerTabContent(Panel tab)
         {
             var root = new TableLayoutPanel
             {
@@ -155,6 +257,7 @@ namespace Audio_Mixer
                 Font = new Font("Segoe UI Semibold", 14f, FontStyle.Bold),
                 AutoSize = true,
                 Dock = DockStyle.Fill,
+                ForeColor = ThemeText,
             };
             headerPanel.Controls.Add(titleLabel, 0, 0);
 
@@ -176,7 +279,7 @@ namespace Audio_Mixer
             {
                 Text = "Status: Nicht verbunden",
                 AutoSize = true,
-                ForeColor = MutedTextColor,
+                ForeColor = ThemeMutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Dock = DockStyle.Fill,
             };
@@ -223,19 +326,21 @@ namespace Audio_Mixer
                 AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
                 Margin = new Padding(0, 0, 0, 8),
+                ForeColor = ThemeText,
             };
             channelsContainer.Controls.Add(channelsHeader, 0, 0);
 
             channelsHeaderTable = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                ColumnCount = 3,
+                ColumnCount = 4,
                 AutoSize = true,
             };
             ApplyChannelColumnStyles(channelsHeaderTable);
             channelsHeaderTable.Controls.Add(CreateHeaderLabel("Kanal"), 0, 0);
             channelsHeaderTable.Controls.Add(CreateHeaderLabel("Audio-Ausgang"), 1, 0);
             channelsHeaderTable.Controls.Add(CreateHeaderLabel("Level"), 2, 0);
+            channelsHeaderTable.Controls.Add(CreateHeaderLabel("Mute"), 3, 0);
             channelsContainer.Controls.Add(channelsHeaderTable, 0, 1);
 
             channelsScrollPanel = new Panel
@@ -249,14 +354,14 @@ namespace Audio_Mixer
             channelsTable = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                ColumnCount = 3,
+                ColumnCount = 4,
                 AutoSize = true,
             };
             ApplyChannelColumnStyles(channelsTable);
             channelsScrollPanel.Controls.Add(channelsTable);
         }
 
-        private void BuildSettingsTabContent(TabPage tab)
+        private void BuildSettingsTabContent(Panel tab)
         {
             var root = new TableLayoutPanel
             {
@@ -295,10 +400,11 @@ namespace Audio_Mixer
                 ColumnCount = 5,
                 AutoSize = true,
             };
-            for (var i = 0; i < settingsPanel.ColumnCount; i++)
-            {
-                settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20f));
-            }
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             generalContainer.Controls.Add(settingsPanel, 0, 1);
 
             settingsPanel.Controls.Add(CreateFieldLabel("Kanäle:"), 0, 0);
@@ -308,8 +414,8 @@ namespace Audio_Mixer
                 Maximum = MaxChannels,
                 Value = settings.ChannelCount,
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
-                ForeColor = Color.White,
+                BackColor = ThemeSurface2,
+                ForeColor = ThemeText,
             };
             channelCountUpDown.ValueChanged += (_, _) =>
             {
@@ -326,8 +432,8 @@ namespace Audio_Mixer
                 Maximum = 200,
                 Value = settings.Deadzone,
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
-                ForeColor = Color.White,
+                BackColor = ThemeSurface2,
+                ForeColor = ThemeText,
             };
             deadzoneUpDown.ValueChanged += (_, _) =>
             {
@@ -339,7 +445,7 @@ namespace Audio_Mixer
             var configPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
+                BackColor = ThemeSurface2,
                 Padding = new Padding(8, 6, 8, 6),
                 Margin = new Padding(8, 0, 0, 0),
             };
@@ -357,9 +463,9 @@ namespace Audio_Mixer
             {
                 Text = "Laden",
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceColor,
+                BackColor = ThemeSurface,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
                 Margin = new Padding(0, 0, 6, 0),
                 Padding = new Padding(6, 2, 6, 2),
             };
@@ -371,9 +477,9 @@ namespace Audio_Mixer
             {
                 Text = "Speichern",
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceColor,
+                BackColor = ThemeSurface,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
                 Margin = new Padding(6, 0, 0, 0),
                 Padding = new Padding(6, 2, 6, 2),
             };
@@ -395,9 +501,9 @@ namespace Audio_Mixer
             {
                 Text = "Profile ▾",
                 AutoSize = true,
-                BackColor = AccentColor,
+                BackColor = ThemeAccent,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
                 Margin = new Padding(0, 8, 0, 0),
                 Padding = new Padding(8, 4, 8, 4),
             };
@@ -439,17 +545,17 @@ namespace Audio_Mixer
                 ColumnCount = 4,
                 AutoSize = true,
             };
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 15));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
             connectionContainer.Controls.Add(connectionPanel, 0, 1);
 
             manualPortCheckBox = new CheckBox
             {
                 Text = "Manuelle Portwahl aktivieren",
                 Dock = DockStyle.Fill,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
                 AutoSize = true,
             };
             manualPortCheckBox.CheckedChanged += (_, _) =>
@@ -464,8 +570,8 @@ namespace Audio_Mixer
             {
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = SurfaceAccentColor,
-                ForeColor = Color.White,
+                BackColor = ThemeSurface2,
+                ForeColor = ThemeText,
                 FlatStyle = FlatStyle.Flat,
             };
             manualPortComboBox.SelectedIndexChanged += (_, _) =>
@@ -481,9 +587,9 @@ namespace Audio_Mixer
             {
                 Text = "Ports aktualisieren",
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
+                BackColor = ThemeSurface2,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
             };
             refreshPortsButton.FlatAppearance.BorderSize = 0;
             refreshPortsButton.Click += (_, _) => PopulatePortList();
@@ -493,9 +599,9 @@ namespace Audio_Mixer
             {
                 Text = "Verbinden",
                 Dock = DockStyle.Fill,
-                BackColor = AccentColor,
+                BackColor = ThemeAccent,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
             };
             manualConnectButton.FlatAppearance.BorderSize = 0;
             manualConnectButton.Click += (_, _) => ConnectManualPort();
@@ -505,7 +611,7 @@ namespace Audio_Mixer
             {
                 Text = "Aktiviere manuelle Portwahl, um einen Port auszuwählen.",
                 AutoSize = true,
-                ForeColor = MutedTextColor,
+                ForeColor = ThemeMutedText,
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 6, 0, 0),
             };
@@ -543,15 +649,15 @@ namespace Audio_Mixer
             colorPanel.Controls.Add(CreateHeaderLabel("Vorschau"), 1, 0);
             colorPanel.Controls.Add(CreateHeaderLabel("Aktion"), 2, 0);
 
-            AddColorPickerRow(colorPanel, 1, "Hintergrund", () => BackgroundColor,
+            AddColorPickerRow(colorPanel, 1, "Hintergrund", () => ThemeBack,
                 color => settings.BackgroundColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 2, "Kartenfläche", () => SurfaceColor,
+            AddColorPickerRow(colorPanel, 2, "Kartenfläche", () => ThemeSurface,
                 color => settings.SurfaceColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 3, "Kartenakzent", () => SurfaceAccentColor,
+            AddColorPickerRow(colorPanel, 3, "Kartenakzent", () => ThemeSurface2,
                 color => settings.SurfaceAccentColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 4, "Akzentfarbe", () => AccentColor,
+            AddColorPickerRow(colorPanel, 4, "Akzentfarbe", () => ThemeAccent,
                 color => settings.AccentColorArgb = color.ToArgb());
-            AddColorPickerRow(colorPanel, 5, "Gedämpfter Text", () => MutedTextColor,
+            AddColorPickerRow(colorPanel, 5, "Gedämpfter Text", () => ThemeMutedText,
                 color => settings.MutedTextColorArgb = color.ToArgb());
 
             var channelSizeCard = CreateCardPanel();
@@ -589,8 +695,8 @@ namespace Audio_Mixer
                 Maximum = 120,
                 Value = settings.ChannelRowHeight,
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
-                ForeColor = Color.White,
+                BackColor = ThemeSurface2,
+                ForeColor = ThemeText,
             };
             channelRowHeightUpDown.ValueChanged += (_, _) =>
             {
@@ -607,8 +713,8 @@ namespace Audio_Mixer
                 Maximum = 240,
                 Value = settings.ChannelLabelWidth,
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
-                ForeColor = Color.White,
+                BackColor = ThemeSurface2,
+                ForeColor = ThemeText,
             };
             channelLabelWidthUpDown.ValueChanged += (_, _) =>
             {
@@ -625,7 +731,7 @@ namespace Audio_Mixer
             {
                 Text = text,
                 Dock = DockStyle.Fill,
-                ForeColor = MutedTextColor,
+                ForeColor = ThemeMutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoSize = true,
             };
@@ -638,7 +744,7 @@ namespace Audio_Mixer
                 Text = text,
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
                 AutoSize = true,
             };
         }
@@ -648,7 +754,7 @@ namespace Audio_Mixer
             return new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceColor,
+                BackColor = ThemeSurface,
                 Padding = new Padding(16),
             };
         }
@@ -659,9 +765,9 @@ namespace Audio_Mixer
             {
                 Text = text,
                 AutoSize = true,
-                BackColor = AccentColor,
+                BackColor = ThemeAccent,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
                 Margin = new Padding(4, 0, 0, 0),
                 Padding = new Padding(8, 4, 8, 4),
             };
@@ -672,10 +778,11 @@ namespace Audio_Mixer
         private void ApplyChannelColumnStyles(TableLayoutPanel table)
         {
             table.ColumnStyles.Clear();
-            table.ColumnCount = 3;
+            table.ColumnCount = 4;
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, settings.ChannelLabelWidth));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
         }
 
         private static Color GetStatusColor(StatusState state)
@@ -765,17 +872,17 @@ namespace Audio_Mixer
             {
                 row.MuteButton.Text = "Muted";
                 row.MuteButton.BackColor = Color.FromArgb(96, 38, 38);
-                row.MuteButton.ForeColor = Color.White;
-                row.LevelBar.Enabled = false;
-                row.LevelPercentLabel.ForeColor = MutedTextColor;
+                row.MuteButton.ForeColor = ThemeText;
+                row.LevelPercentLabel.ForeColor = ThemeMutedText;
+                row.LevelFill.BackColor = Color.FromArgb(72, 72, 72);
             }
             else
             {
                 row.MuteButton.Text = "Mute";
-                row.MuteButton.BackColor = SurfaceAccentColor;
-                row.MuteButton.ForeColor = MutedTextColor;
-                row.LevelBar.Enabled = true;
-                row.LevelPercentLabel.ForeColor = MutedTextColor;
+                row.MuteButton.BackColor = ThemeSurface2;
+                row.MuteButton.ForeColor = ThemeText;
+                row.LevelPercentLabel.ForeColor = ThemeMutedText;
+                row.LevelFill.BackColor = ThemeAccent;
             }
         }
 
@@ -831,7 +938,7 @@ namespace Audio_Mixer
                 Text = text,
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-                ForeColor = MutedTextColor,
+                ForeColor = ThemeMutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
             };
         }
@@ -852,9 +959,9 @@ namespace Audio_Mixer
             {
                 Text = "Farbe wählen",
                 Dock = DockStyle.Fill,
-                BackColor = SurfaceAccentColor,
+                BackColor = ThemeSurface2,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = ThemeText,
             };
             button.FlatAppearance.BorderSize = 0;
             button.Click += (_, _) =>
@@ -876,7 +983,7 @@ namespace Audio_Mixer
 
         private void RebuildUi()
         {
-            var selectedTabIndex = mainTabControl?.SelectedIndex ?? 0;
+            var selectedView = currentView;
             var statusText = statusLabel?.Text;
             var previousStatus = statusState;
 
@@ -891,10 +998,7 @@ namespace Audio_Mixer
                 UpdateStatus(previousStatus, statusText);
             }
 
-            if (mainTabControl != null && selectedTabIndex < mainTabControl.TabCount)
-            {
-                mainTabControl.SelectedIndex = selectedTabIndex;
-            }
+            SetActiveView(selectedView);
 
             ResumeLayout();
         }
@@ -974,7 +1078,7 @@ namespace Audio_Mixer
             for (var i = 0; i < count; i++)
             {
                 var rowIndex = i;
-                var rowBackground = i % 2 == 0 ? SurfaceAccentColor : SurfaceColor;
+                var rowBackground = i % 2 == 0 ? ThemeSurface2 : ThemeSurface;
                 channelsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, settings.ChannelRowHeight));
 
                 var label = new Label
@@ -982,6 +1086,7 @@ namespace Audio_Mixer
                     Text = $"Kanal {i + 1}",
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleLeft,
+                    ForeColor = ThemeText,
                 };
                 channelsTable.Controls.Add(CreateCellPanel(label, rowBackground), 0, rowIndex);
 
@@ -989,8 +1094,8 @@ namespace Audio_Mixer
                 {
                     Dock = DockStyle.Fill,
                     DropDownStyle = ComboBoxStyle.DropDownList,
-                    BackColor = SurfaceColor,
-                    ForeColor = Color.White,
+                    BackColor = ThemeSurface,
+                    ForeColor = ThemeText,
                     FlatStyle = FlatStyle.Flat,
                 };
 
@@ -1008,29 +1113,38 @@ namespace Audio_Mixer
 
                 channelsTable.Controls.Add(CreateCellPanel(deviceCombo, rowBackground), 1, rowIndex);
 
-                var progress = new ProgressBar
+                var progressTrack = new Panel
                 {
                     Dock = DockStyle.Fill,
-                    Maximum = 1023,
-                    Value = 0,
-                    Style = ProgressBarStyle.Continuous,
+                    BackColor = ThemeSurface2,
+                    Padding = new Padding(2),
+                    Margin = new Padding(0),
                 };
+                var progressFill = new Panel
+                {
+                    Dock = DockStyle.Left,
+                    BackColor = ThemeAccent,
+                    Width = 0,
+                };
+                progressTrack.Controls.Add(progressFill);
+
                 var levelPercentLabel = new Label
                 {
                     Text = "0%",
                     Dock = DockStyle.Fill,
                     TextAlign = ContentAlignment.MiddleRight,
-                    ForeColor = MutedTextColor,
+                    ForeColor = ThemeMutedText,
                     AutoSize = false,
                 };
                 var muteButton = new Button
                 {
                     Text = "Mute",
                     Dock = DockStyle.Fill,
-                    BackColor = SurfaceAccentColor,
+                    MinimumSize = new Size(72, 24),
+                    BackColor = ThemeSurface2,
                     FlatStyle = FlatStyle.Flat,
-                    ForeColor = MutedTextColor,
-                    Margin = new Padding(6, 6, 0, 6),
+                    ForeColor = ThemeText,
+                    Margin = new Padding(6, 6, 6, 6),
                     Padding = new Padding(4, 2, 4, 2),
                 };
                 muteButton.FlatAppearance.BorderSize = 0;
@@ -1038,26 +1152,27 @@ namespace Audio_Mixer
                 var progressPanel = new Panel
                 {
                     Dock = DockStyle.Fill,
-                    Padding = new Padding(0, 10, 0, 10),
+                    Padding = new Padding(0, Math.Max(6, (settings.ChannelRowHeight - 22) / 2), 0,
+                        Math.Max(6, (settings.ChannelRowHeight - 22) / 2)),
                 };
-                progressPanel.Controls.Add(progress);
+                progressPanel.Controls.Add(progressTrack);
 
                 var levelContainer = new TableLayoutPanel
                 {
                     Dock = DockStyle.Fill,
-                    ColumnCount = 3,
+                    ColumnCount = 2,
                     RowCount = 1,
                 };
                 levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
-                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 78));
+                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
                 levelContainer.Controls.Add(progressPanel, 0, 0);
                 levelContainer.Controls.Add(levelPercentLabel, 1, 0);
-                levelContainer.Controls.Add(muteButton, 2, 0);
                 channelsTable.Controls.Add(CreateCellPanel(levelContainer, rowBackground), 2, rowIndex);
+                channelsTable.Controls.Add(CreateCellPanel(muteButton, rowBackground), 3, rowIndex);
 
-                var row = new ChannelRow(i, deviceCombo, progress, levelPercentLabel, muteButton);
+                var row = new ChannelRow(i, deviceCombo, progressTrack, progressFill, levelPercentLabel, muteButton);
                 muteButton.Click += (_, _) => ToggleMute(row);
+                progressTrack.SizeChanged += (_, _) => UpdateLevelBar(row, row.LevelValue);
                 channelRows.Add(row);
                 UpdateMuteUi(row);
             }
@@ -1337,7 +1452,7 @@ namespace Audio_Mixer
                     }
 
                     lastValues[i] = value;
-                    channelRows[i].LevelBar.Value = value;
+                    UpdateLevelBar(channelRows[i], value);
                     channelRows[i].LevelPercentLabel.Text = $"{Math.Round(value / 1023f * 100):0}%";
 
                     var deviceId = settings.Channels.ElementAtOrDefault(i)?.DeviceId;
@@ -1388,39 +1503,6 @@ namespace Audio_Mixer
             settings = loaded;
             RebuildUi();
             PersistLastConfigIdentifier(dialog.FileName);
-        }
-
-        private void MainTabControlOnDrawItem(object? sender, DrawItemEventArgs e)
-        {
-            if (mainTabControl.TabPages.Count <= e.Index) return;
-
-            var tab = mainTabControl.TabPages[e.Index];
-            var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
-            var backColor = selected ? SurfaceColor : BackgroundColor;
-            var foreColor = selected ? Color.White : MutedTextColor;
-
-            using var backgroundBrush = new SolidBrush(backColor);
-            e.Graphics.FillRectangle(backgroundBrush, e.Bounds);
-            TextRenderer.DrawText(
-                e.Graphics,
-                tab.Text,
-                Font,
-                e.Bounds,
-                foreColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-
-            if (selected)
-            {
-                using var accentPen = new Pen(AccentColor, 2f);
-                var underlineY = e.Bounds.Bottom - 2;
-                e.Graphics.DrawLine(accentPen, e.Bounds.Left + 6, underlineY, e.Bounds.Right - 6, underlineY);
-            }
-        }
-
-        private void MainTabControlOnPaint(object? sender, PaintEventArgs e)
-        {
-            using var brush = new SolidBrush(BackgroundColor);
-            e.Graphics.FillRectangle(brush, mainTabControl.ClientRectangle);
         }
 
         private static void EnableDoubleBuffering(Control control)
@@ -1531,20 +1613,24 @@ namespace Audio_Mixer
 
         private sealed class ChannelRow
         {
-            public ChannelRow(int index, ComboBox deviceComboBox, ProgressBar levelBar, Label levelPercentLabel, Button muteButton)
+            public ChannelRow(int index, ComboBox deviceComboBox, Panel levelTrack, Panel levelFill,
+                Label levelPercentLabel, Button muteButton)
             {
                 Index = index;
                 DeviceComboBox = deviceComboBox;
-                LevelBar = levelBar;
+                LevelTrack = levelTrack;
+                LevelFill = levelFill;
                 LevelPercentLabel = levelPercentLabel;
                 MuteButton = muteButton;
             }
 
             public int Index { get; }
             public ComboBox DeviceComboBox { get; }
-            public ProgressBar LevelBar { get; }
+            public Panel LevelTrack { get; }
+            public Panel LevelFill { get; }
             public Label LevelPercentLabel { get; }
             public Button MuteButton { get; }
+            public int LevelValue { get; set; }
             public bool IsMuted { get; set; }
         }
 
@@ -1554,6 +1640,21 @@ namespace Audio_Mixer
             Searching,
             Connected,
             Error,
+        }
+
+        private enum ViewKind
+        {
+            Mixer,
+            Settings,
+        }
+
+        private void UpdateLevelBar(ChannelRow row, int value)
+        {
+            row.LevelValue = value;
+            var trackWidth = row.LevelTrack.ClientSize.Width - row.LevelTrack.Padding.Horizontal;
+            trackWidth = Math.Max(0, trackWidth);
+            var fillWidth = (int)Math.Round(trackWidth * value / 1023f);
+            row.LevelFill.Width = Math.Max(0, fillWidth);
         }
 
         private sealed class StatusDot : Control
