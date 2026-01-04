@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace Audio_Mixer
@@ -9,14 +11,22 @@ namespace Audio_Mixer
         public IReadOnlyList<AudioDevice> GetOutputDevices()
         {
             var devices = new List<AudioDevice>();
-            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
-            enumerator.EnumAudioEndpoints(EDataFlow.eRender, DeviceState.Active, out var collection);
-            collection.GetCount(out var count);
+
+            var enumerator = CreateDeviceEnumerator();
+            int hr = enumerator.EnumAudioEndpoints(EDataFlow.eRender, (uint)DeviceState.Active, out var collection);
+            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
+            hr = collection.GetCount(out var count);
+            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
 
             for (uint i = 0; i < count; i++)
             {
-                collection.Item(i, out var device);
-                device.GetId(out var id);
+                hr = collection.Item(i, out var device);
+                if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
+                hr = device.GetId(out var id);
+                if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
                 var name = GetDeviceName(device);
                 devices.Add(new AudioDevice(id, name));
             }
@@ -26,49 +36,61 @@ namespace Audio_Mixer
 
         public void SetDeviceVolume(string deviceId, float volumeScalar)
         {
-            if (volumeScalar < 0f)
-            {
-                volumeScalar = 0f;
-            }
-            if (volumeScalar > 1f)
-            {
-                volumeScalar = 1f;
-            }
+            if (volumeScalar < 0f) volumeScalar = 0f;
+            if (volumeScalar > 1f) volumeScalar = 1f;
 
             if (!volumeCache.TryGetValue(deviceId, out var endpoint))
             {
-                var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
-                enumerator.GetDevice(deviceId, out var device);
+                var enumerator = CreateDeviceEnumerator();
+
+                int hr = enumerator.GetDevice(deviceId, out var device);
+                if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
                 endpoint = GetEndpointVolume(device);
                 volumeCache[deviceId] = endpoint;
             }
 
-            endpoint.SetMasterVolumeLevelScalar(volumeScalar, Guid.Empty);
+            int hr2 = endpoint.SetMasterVolumeLevelScalar(volumeScalar, Guid.Empty);
+            if (hr2 != 0) Marshal.ThrowExceptionForHR(hr2);
+        }
+
+        private static IMMDeviceEnumerator CreateDeviceEnumerator()
+        {
+            // Deutlich robuster als selbst CoCreateInstance aufzurufen
+            return (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
         }
 
         private static string GetDeviceName(IMMDevice device)
         {
-            device.OpenPropertyStore(StgmAccess.Read, out var store);
-            var key = PropertyKeys.PKEY_Device_FriendlyName;
-            store.GetValue(ref key, out var value);
-            var name = value.GetValue() ?? "Unbekanntes Gerät";
-            value.Clear();
-            return name;
+            int hr = device.OpenPropertyStore(StgmAccess.Read, out var propertyStore);
+            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
+            var friendlyNameKey = PropertyKeys.PKEY_Device_FriendlyName;
+            hr = propertyStore.GetValue(ref friendlyNameKey, out var propVariant);
+            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
+            string? name = propVariant.GetValue();
+            propVariant.Clear();
+
+            return name ?? string.Empty;
         }
 
         private static IAudioEndpointVolume GetEndpointVolume(IMMDevice device)
         {
             var iid = typeof(IAudioEndpointVolume).GUID;
-            device.Activate(ref iid, ClsCtx.All, IntPtr.Zero, out var obj);
+            int hr = device.Activate(ref iid, ClsCtx.InprocServer, IntPtr.Zero, out var obj);
+            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
             return (IAudioEndpointVolume)obj;
         }
     }
 
     public sealed record AudioDevice(string Id, string Name);
 
+    // COM coclass
     [ComImport]
     [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-    internal sealed class MMDeviceEnumerator
+    internal class MMDeviceEnumeratorComObject
     {
     }
 
@@ -143,13 +165,14 @@ namespace Audio_Mixer
     internal struct PropVariant
     {
         [FieldOffset(0)]
-        private readonly ushort vt;
+        private ushort vt;
 
         [FieldOffset(8)]
-        private readonly IntPtr pointerValue;
+        private IntPtr pointerValue;
 
         public string? GetValue()
         {
+            // VT_LPWSTR = 31
             return vt == 31 ? Marshal.PtrToStringUni(pointerValue) : null;
         }
 
@@ -162,13 +185,21 @@ namespace Audio_Mixer
         private static extern int PropVariantClear(ref PropVariant pvar);
     }
 
+    [ComImport]
     [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IMMDeviceEnumerator
     {
-        int EnumAudioEndpoints(EDataFlow dataFlow, DeviceState dwStateMask, out IMMDeviceCollection ppDevices);
+        // WICHTIG: dwStateMask muss uint sein + MarshalAs Interface beim Out
+        int EnumAudioEndpoints(
+            EDataFlow dataFlow,
+            uint dwStateMask,
+            [MarshalAs(UnmanagedType.Interface)] out IMMDeviceCollection ppDevices);
+
         int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppEndpoint);
+
         int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string pwstrId, out IMMDevice ppDevice);
+
         int RegisterEndpointNotificationCallback(IntPtr pClient);
         int UnregisterEndpointNotificationCallback(IntPtr pClient);
     }
@@ -180,6 +211,7 @@ namespace Audio_Mixer
         eCommunications = 2,
     }
 
+    [ComImport]
     [Guid("0BD7A1BE-7A1A-44DB-8397-C0F6EEDCC8DD")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IMMDeviceCollection
@@ -188,17 +220,22 @@ namespace Audio_Mixer
         int Item(uint nDevice, out IMMDevice ppDevice);
     }
 
+    [ComImport]
     [Guid("D666063F-1587-4E43-81F1-B948E807363F")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IMMDevice
     {
         int Activate(ref Guid iid, ClsCtx dwClsCtx, IntPtr pActivationParams,
             [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+
         int OpenPropertyStore(StgmAccess stgmAccess, out IPropertyStore ppProperties);
+
         int GetId([MarshalAs(UnmanagedType.LPWStr)] out string ppstrId);
+
         int GetState(out DeviceState pdwState);
     }
 
+    [ComImport]
     [Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IPropertyStore
@@ -210,6 +247,7 @@ namespace Audio_Mixer
         int Commit();
     }
 
+    [ComImport]
     [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IAudioEndpointVolume
