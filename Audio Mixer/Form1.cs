@@ -39,12 +39,18 @@ namespace Audio_Mixer
         private Button refreshPortsButton = null!;
         private NumericUpDown channelRowHeightUpDown = null!;
         private NumericUpDown channelLabelWidthUpDown = null!;
+        private TableLayoutPanel channelsHeaderTable = null!;
+        private Panel channelsScrollPanel = null!;
+        private StatusDot statusDot = null!;
 
         private Color BackgroundColor => Color.FromArgb(settings.BackgroundColorArgb);
         private Color SurfaceColor => Color.FromArgb(settings.SurfaceColorArgb);
         private Color SurfaceAccentColor => Color.FromArgb(settings.SurfaceAccentColorArgb);
         private Color AccentColor => Color.FromArgb(settings.AccentColorArgb);
         private Color MutedTextColor => Color.FromArgb(settings.MutedTextColorArgb);
+
+        private readonly ToolTip deviceToolTip = new() { ShowAlways = true };
+        private StatusState statusState = StatusState.Idle;
 
         public Form1()
         {
@@ -109,6 +115,12 @@ namespace Audio_Mixer
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             tab.Controls.Add(root);
 
+            BuildHeader(root);
+            BuildChannelContainer(root);
+        }
+
+        private void BuildHeader(TableLayoutPanel root)
+        {
             var headerCard = CreateCardPanel();
             headerCard.Margin = new Padding(0, 0, 0, 16);
             root.Controls.Add(headerCard);
@@ -119,9 +131,9 @@ namespace Audio_Mixer
                 ColumnCount = 3,
                 AutoSize = true,
             };
-            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             headerCard.Controls.Add(headerPanel);
 
             var titleLabel = new Label
@@ -133,6 +145,20 @@ namespace Audio_Mixer
             };
             headerPanel.Controls.Add(titleLabel, 0, 0);
 
+            var statusPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+            };
+            statusDot = new StatusDot
+            {
+                Size = new Size(12, 12),
+                Margin = new Padding(0, 4, 6, 0),
+                DotColor = GetStatusColor(statusState),
+            };
             statusLabel = new Label
             {
                 Text = "Status: Nicht verbunden",
@@ -141,20 +167,41 @@ namespace Audio_Mixer
                 TextAlign = ContentAlignment.MiddleLeft,
                 Dock = DockStyle.Fill,
             };
-            headerPanel.Controls.Add(statusLabel, 1, 0);
+            statusPanel.Controls.Add(statusDot);
+            statusPanel.Controls.Add(statusLabel);
+            headerPanel.Controls.Add(statusPanel, 1, 0);
 
-            rescanButton = new Button
+            var actionPanel = new FlowLayoutPanel
             {
-                Text = "Auto-Suche",
                 Dock = DockStyle.Fill,
-                BackColor = AccentColor,
-                FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                AutoSize = true,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
             };
-            rescanButton.FlatAppearance.BorderSize = 0;
-            rescanButton.Click += (_, _) => StartAutoScan();
-            headerPanel.Controls.Add(rescanButton, 2, 0);
 
+            var gamingButton = CreateHeaderButton("Gaming");
+            gamingButton.Click += (_, _) => LoadProfile("gaming");
+            actionPanel.Controls.Add(gamingButton);
+
+            var streamingButton = CreateHeaderButton("Streaming");
+            streamingButton.Click += (_, _) => LoadProfile("streaming");
+            actionPanel.Controls.Add(streamingButton);
+
+            var officeButton = CreateHeaderButton("Office");
+            officeButton.Click += (_, _) => LoadProfile("office");
+            actionPanel.Controls.Add(officeButton);
+
+            rescanButton = CreateHeaderButton("Auto-Suche");
+            rescanButton.Click += (_, _) => StartAutoScan();
+            actionPanel.Controls.Add(rescanButton);
+
+            headerPanel.Controls.Add(actionPanel, 2, 0);
+        }
+
+        private void BuildChannelContainer(TableLayoutPanel root)
+        {
             var channelsCard = CreateCardPanel();
             root.Controls.Add(channelsCard);
 
@@ -162,8 +209,9 @@ namespace Audio_Mixer
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
             };
+            channelsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             channelsContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             channelsContainer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             channelsCard.Controls.Add(channelsContainer);
@@ -175,19 +223,36 @@ namespace Audio_Mixer
                 Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
                 Margin = new Padding(0, 0, 0, 8),
             };
-            channelsContainer.Controls.Add(channelsHeader);
+            channelsContainer.Controls.Add(channelsHeader, 0, 0);
 
-            channelsTable = new TableLayoutPanel
+            channelsHeaderTable = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                ColumnCount = 3,
+                AutoSize = true,
+            };
+            ApplyChannelColumnStyles(channelsHeaderTable);
+            channelsHeaderTable.Controls.Add(CreateHeaderLabel("Kanal"), 0, 0);
+            channelsHeaderTable.Controls.Add(CreateHeaderLabel("Audio-Ausgang"), 1, 0);
+            channelsHeaderTable.Controls.Add(CreateHeaderLabel("Level"), 2, 0);
+            channelsContainer.Controls.Add(channelsHeaderTable, 0, 1);
+
+            channelsScrollPanel = new Panel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 3,
                 AutoScroll = true,
                 Padding = new Padding(0, 4, 0, 0),
             };
-            channelsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, settings.ChannelLabelWidth));
-            channelsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            channelsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-            channelsContainer.Controls.Add(channelsTable);
+            channelsContainer.Controls.Add(channelsScrollPanel, 0, 2);
+
+            channelsTable = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                ColumnCount = 3,
+                AutoSize = true,
+            };
+            ApplyChannelColumnStyles(channelsTable);
+            channelsScrollPanel.Controls.Add(channelsTable);
         }
 
         private void BuildSettingsTabContent(TabPage tab)
@@ -516,6 +581,147 @@ namespace Audio_Mixer
             };
         }
 
+        private Button CreateHeaderButton(string text)
+        {
+            var button = new Button
+            {
+                Text = text,
+                AutoSize = true,
+                BackColor = AccentColor,
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White,
+                Margin = new Padding(4, 0, 0, 0),
+                Padding = new Padding(8, 4, 8, 4),
+            };
+            button.FlatAppearance.BorderSize = 0;
+            return button;
+        }
+
+        private void ApplyChannelColumnStyles(TableLayoutPanel table)
+        {
+            table.ColumnStyles.Clear();
+            table.ColumnCount = 3;
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, settings.ChannelLabelWidth));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+        }
+
+        private static Color GetStatusColor(StatusState state)
+        {
+            return state switch
+            {
+                StatusState.Searching => Color.Goldenrod,
+                StatusState.Connected => Color.LimeGreen,
+                StatusState.Error => Color.IndianRed,
+                _ => Color.DimGray,
+            };
+        }
+
+        private void UpdateStatus(StatusState state, string text)
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(() => UpdateStatus(state, text));
+                return;
+            }
+
+            statusState = state;
+            if (statusLabel != null)
+            {
+                statusLabel.Text = text;
+            }
+
+            if (statusDot != null)
+            {
+                statusDot.DotColor = GetStatusColor(state);
+                statusDot.Invalidate();
+            }
+        }
+
+        private void UpdateDeviceToolTip(ComboBox comboBox)
+        {
+            if (comboBox.SelectedItem is AudioDeviceItem item)
+            {
+                deviceToolTip.SetToolTip(comboBox, item.Name);
+            }
+            else
+            {
+                deviceToolTip.SetToolTip(comboBox, string.Empty);
+            }
+        }
+
+        private void UpdateComboDropDownWidth(ComboBox comboBox)
+        {
+            if (comboBox.Items.Count == 0) return;
+
+            var maxWidth = comboBox.Width;
+            foreach (var item in comboBox.Items)
+            {
+                var text = item?.ToString() ?? string.Empty;
+                var size = TextRenderer.MeasureText(text, comboBox.Font);
+                maxWidth = Math.Max(maxWidth, size.Width);
+            }
+
+            maxWidth += SystemInformation.VerticalScrollBarWidth + 16;
+            comboBox.DropDownWidth = maxWidth;
+        }
+
+        private void ToggleMute(ChannelRow row)
+        {
+            row.IsMuted = !row.IsMuted;
+            row.MuteButton.BackColor = row.IsMuted ? AccentColor : SurfaceAccentColor;
+
+            var deviceId = settings.Channels.ElementAtOrDefault(row.Index)?.DeviceId;
+            if (string.IsNullOrWhiteSpace(deviceId)) return;
+
+            if (row.IsMuted)
+            {
+                audioManager.SetDeviceVolume(deviceId, 0f);
+                return;
+            }
+
+            var value = row.Index < lastValues.Length ? lastValues[row.Index] : 0;
+            if (value < 0) value = 0;
+            var volume = value / 1023f;
+            audioManager.SetDeviceVolume(deviceId, volume);
+        }
+
+        private void LoadProfile(string profileName)
+        {
+            var profilePath = Path.Combine(AppContext.BaseDirectory, $"{profileName}.json");
+            MixerSettings? profile = null;
+
+            if (File.Exists(profilePath))
+            {
+                try
+                {
+                    var json = File.ReadAllText(profilePath);
+                    profile = JsonSerializer.Deserialize<MixerSettings>(json);
+                }
+                catch
+                {
+                    profile = null;
+                }
+            }
+
+            profile ??= GetFallbackProfile(profileName);
+            settings = profile;
+            RebuildUi();
+        }
+
+        private static MixerSettings GetFallbackProfile(string profileName)
+        {
+            var fallback = MixerSettings.CreateDefault();
+            return profileName.ToLowerInvariant() switch
+            {
+                "gaming" => fallback,
+                "streaming" => fallback,
+                "office" => fallback,
+                _ => fallback,
+            };
+        }
+
         private static Panel CreateCellPanel(Control content, Color backColor)
         {
             var panel = new Panel
@@ -582,6 +788,7 @@ namespace Audio_Mixer
         {
             var selectedTabIndex = mainTabControl?.SelectedIndex ?? 0;
             var statusText = statusLabel?.Text;
+            var previousStatus = statusState;
 
             SuspendLayout();
             Controls.Clear();
@@ -591,7 +798,7 @@ namespace Audio_Mixer
 
             if (!string.IsNullOrEmpty(statusText))
             {
-                statusLabel.Text = statusText;
+                UpdateStatus(previousStatus, statusText);
             }
 
             if (mainTabControl != null && selectedTabIndex < mainTabControl.TabCount)
@@ -634,7 +841,7 @@ namespace Audio_Mixer
             if (manualEnabled)
             {
                 scanCts?.Cancel();
-                statusLabel.Text = "Status: Manuelle Portwahl aktiv";
+                UpdateStatus(StatusState.Idle, "Status: Manuelle Portwahl aktiv");
             }
         }
 
@@ -642,14 +849,14 @@ namespace Audio_Mixer
         {
             if (!settings.ManualPortEnabled)
             {
-                statusLabel.Text = "Status: Manuelle Portwahl deaktiviert";
+                UpdateStatus(StatusState.Idle, "Status: Manuelle Portwahl deaktiviert");
                 return;
             }
 
             var portName = settings.ManualPortName;
             if (string.IsNullOrWhiteSpace(portName))
             {
-                statusLabel.Text = "Status: Kein Port ausgewählt";
+                UpdateStatus(StatusState.Idle, "Status: Kein Port ausgewählt");
                 return;
             }
 
@@ -665,24 +872,17 @@ namespace Audio_Mixer
 
             lastValues = Enumerable.Repeat(-1, count).ToArray();
 
-            if (channelsTable.ColumnStyles.Count > 0)
-            {
-                channelsTable.ColumnStyles[0].Width = settings.ChannelLabelWidth;
-            }
+            ApplyChannelColumnStyles(channelsTable);
+            ApplyChannelColumnStyles(channelsHeaderTable);
 
             if (settings.Channels.Count > count)
             {
                 settings.Channels.RemoveRange(count, settings.Channels.Count - count);
             }
 
-            channelsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-            channelsTable.Controls.Add(CreateHeaderLabel("Kanal"), 0, 0);
-            channelsTable.Controls.Add(CreateHeaderLabel("Audio-Ausgang"), 1, 0);
-            channelsTable.Controls.Add(CreateHeaderLabel("Level"), 2, 0);
-
             for (var i = 0; i < count; i++)
             {
-                var rowIndex = i + 1;
+                var rowIndex = i;
                 var rowBackground = i % 2 == 0 ? SurfaceAccentColor : SurfaceColor;
                 channelsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, settings.ChannelRowHeight));
 
@@ -711,7 +911,9 @@ namespace Audio_Mixer
                         EnsureChannelSettings(indexCopy);
                         settings.Channels[indexCopy].DeviceId = item.Id;
                     }
+                    UpdateDeviceToolTip(deviceCombo);
                 };
+                deviceCombo.SizeChanged += (_, _) => UpdateComboDropDownWidth(deviceCombo);
 
                 channelsTable.Controls.Add(CreateCellPanel(deviceCombo, rowBackground), 1, rowIndex);
 
@@ -722,10 +924,39 @@ namespace Audio_Mixer
                     Value = 0,
                     Style = ProgressBarStyle.Continuous,
                 };
-                channelsTable.Controls.Add(CreateCellPanel(progress, rowBackground), 2, rowIndex);
+                var muteButton = new Button
+                {
+                    Text = "Mute",
+                    Dock = DockStyle.Fill,
+                    BackColor = SurfaceAccentColor,
+                    FlatStyle = FlatStyle.Flat,
+                    ForeColor = Color.White,
+                    Margin = new Padding(6, 2, 0, 2),
+                };
+                muteButton.FlatAppearance.BorderSize = 0;
 
-                channelRows.Add(new ChannelRow(i, deviceCombo, progress));
+                var levelContainer = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    ColumnCount = 2,
+                    RowCount = 1,
+                };
+                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                levelContainer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
+                levelContainer.Controls.Add(progress, 0, 0);
+                levelContainer.Controls.Add(muteButton, 1, 0);
+                channelsTable.Controls.Add(CreateCellPanel(levelContainer, rowBackground), 2, rowIndex);
+
+                var row = new ChannelRow(i, deviceCombo, progress, muteButton);
+                muteButton.Click += (_, _) => ToggleMute(row);
+                channelRows.Add(row);
             }
+
+            channelsTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            channelsTable.RowCount = count + 1;
+            var fillerPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
+            channelsTable.Controls.Add(fillerPanel, 0, count);
+            channelsTable.SetColumnSpan(fillerPanel, channelsTable.ColumnCount);
 
             PopulateDeviceCombos();
             ApplyChannelSelections();
@@ -751,6 +982,7 @@ namespace Audio_Mixer
                 {
                     row.DeviceComboBox.Items.Add(device);
                 }
+                UpdateComboDropDownWidth(row.DeviceComboBox);
             }
         }
 
@@ -797,6 +1029,9 @@ namespace Audio_Mixer
                     channelRows[i].DeviceComboBox.SelectedIndex = 0;
                     settings.Channels[i].DeviceId = audioDevices[0].Id;
                 }
+
+                UpdateDeviceToolTip(channelRows[i].DeviceComboBox);
+                UpdateComboDropDownWidth(channelRows[i].DeviceComboBox);
             }
         }
 
@@ -812,7 +1047,7 @@ namespace Audio_Mixer
         {
             if (settings.ManualPortEnabled)
             {
-                statusLabel.Text = "Status: Manuelle Portwahl aktiv";
+                UpdateStatus(StatusState.Idle, "Status: Manuelle Portwahl aktiv");
                 return;
             }
 
@@ -820,7 +1055,7 @@ namespace Audio_Mixer
             scanCts = new CancellationTokenSource();
             var token = scanCts.Token;
 
-            statusLabel.Text = "Status: Suche Mixer.";
+            UpdateStatus(StatusState.Searching, "Status: Suche Mixer.");
             rescanButton.Enabled = false;
 
             Task.Run(async () =>
@@ -833,7 +1068,7 @@ namespace Audio_Mixer
                     rescanButton.Enabled = true;
                     if (port == null)
                     {
-                        statusLabel.Text = "Status: Kein Mixer gefunden";
+                        UpdateStatus(StatusState.Idle, "Status: Kein Mixer gefunden");
                     }
                     else
                     {
@@ -926,11 +1161,11 @@ namespace Audio_Mixer
                 serialPort.DataReceived += SerialPortOnDataReceived;
                 serialPort.Open();
 
-                statusLabel.Text = $"Status: Verbunden ({portName})";
+                UpdateStatus(StatusState.Connected, $"Status: Verbunden ({portName})");
             }
             catch (Exception ex)
             {
-                statusLabel.Text = $"Status: Fehler beim Verbinden ({ex.Message})";
+                UpdateStatus(StatusState.Error, $"Status: Fehler beim Verbinden ({ex.Message})");
             }
         }
 
@@ -997,8 +1232,15 @@ namespace Audio_Mixer
                     var deviceId = settings.Channels.ElementAtOrDefault(i)?.DeviceId;
                     if (!string.IsNullOrWhiteSpace(deviceId))
                     {
-                        var volume = value / 1023f;
-                        audioManager.SetDeviceVolume(deviceId, volume);
+                        if (channelRows[i].IsMuted)
+                        {
+                            audioManager.SetDeviceVolume(deviceId, 0f);
+                        }
+                        else
+                        {
+                            var volume = value / 1023f;
+                            audioManager.SetDeviceVolume(deviceId, volume);
+                        }
                     }
                 }
             });
@@ -1046,16 +1288,48 @@ namespace Audio_Mixer
 
         private sealed class ChannelRow
         {
-            public ChannelRow(int index, ComboBox deviceComboBox, ProgressBar levelBar)
+            public ChannelRow(int index, ComboBox deviceComboBox, ProgressBar levelBar, Button muteButton)
             {
                 Index = index;
                 DeviceComboBox = deviceComboBox;
                 LevelBar = levelBar;
+                MuteButton = muteButton;
             }
 
             public int Index { get; }
             public ComboBox DeviceComboBox { get; }
             public ProgressBar LevelBar { get; }
+            public Button MuteButton { get; }
+            public bool IsMuted { get; set; }
+        }
+
+        private enum StatusState
+        {
+            Idle,
+            Searching,
+            Connected,
+            Error,
+        }
+
+        private sealed class StatusDot : Control
+        {
+            public Color DotColor { get; set; } = Color.DimGray;
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using var brush = new SolidBrush(DotColor);
+                e.Graphics.FillEllipse(brush, 0, 0, Width - 1, Height - 1);
+                using var pen = new Pen(Color.Black);
+                e.Graphics.DrawEllipse(pen, 0, 0, Width - 1, Height - 1);
+            }
+
+            protected override void OnResize(EventArgs e)
+            {
+                base.OnResize(e);
+                Invalidate();
+            }
         }
 
         private sealed class AudioDeviceItem
