@@ -1,10 +1,578 @@
+using System.IO.Ports;
+using System.Text.Json;
+
 namespace Audio_Mixer
 {
     public partial class Form1 : Form
     {
+        private const int MaxChannels = 8;
+        private readonly CoreAudioManager audioManager = new();
+        private readonly List<ChannelRow> channelRows = new();
+        private readonly List<AudioDeviceItem> audioDevices = new();
+        private CancellationTokenSource? scanCts;
+        private SerialPort? serialPort;
+        private int[] lastValues = Array.Empty<int>();
+        private MixerSettings settings = MixerSettings.CreateDefault();
+
+        private Label statusLabel = null!;
+        private Button rescanButton = null!;
+        private NumericUpDown channelCountUpDown = null!;
+        private NumericUpDown deadzoneUpDown = null!;
+        private TableLayoutPanel channelsTable = null!;
+        private Button saveSettingsButton = null!;
+        private Button loadSettingsButton = null!;
+
         public Form1()
         {
             InitializeComponent();
+            BuildUi();
+            UpdateDevices();
+            ApplySettings(settings);
+            StartAutoScan();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            scanCts?.Cancel();
+            CloseSerialPort();
+        }
+
+        private void BuildUi()
+        {
+            Text = "Audio Mixer";
+            MinimumSize = new Size(720, 480);
+            BackColor = Color.FromArgb(32, 32, 36);
+            ForeColor = Color.White;
+
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(16),
+            };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            Controls.Add(root);
+
+            var headerPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                AutoSize = true,
+            };
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+            root.Controls.Add(headerPanel);
+
+            var titleLabel = new Label
+            {
+                Text = "Mixer Verbindung",
+                Font = new Font(Font.FontFamily, 14, FontStyle.Bold),
+                AutoSize = true,
+                Dock = DockStyle.Fill,
+            };
+            headerPanel.Controls.Add(titleLabel, 0, 0);
+
+            statusLabel = new Label
+            {
+                Text = "Status: Nicht verbunden",
+                AutoSize = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Dock = DockStyle.Fill,
+            };
+            headerPanel.Controls.Add(statusLabel, 1, 0);
+
+            rescanButton = new Button
+            {
+                Text = "Auto-Suche",
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(68, 108, 179),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White,
+            };
+            rescanButton.FlatAppearance.BorderSize = 0;
+            rescanButton.Click += (_, _) => StartAutoScan();
+            headerPanel.Controls.Add(rescanButton, 2, 0);
+
+            var settingsPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 6,
+                AutoSize = true,
+                Margin = new Padding(0, 16, 0, 8),
+            };
+            for (var i = 0; i < settingsPanel.ColumnCount; i++)
+            {
+                settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16.6f));
+            }
+            root.Controls.Add(settingsPanel);
+
+            settingsPanel.Controls.Add(CreateFieldLabel("Kanäle:"), 0, 0);
+            channelCountUpDown = new NumericUpDown
+            {
+                Minimum = 1,
+                Maximum = MaxChannels,
+                Value = settings.ChannelCount,
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(48, 48, 54),
+                ForeColor = Color.White,
+            };
+            channelCountUpDown.ValueChanged += (_, _) =>
+            {
+                settings.ChannelCount = (int)channelCountUpDown.Value;
+                BuildChannelRows(settings.ChannelCount);
+            };
+            settingsPanel.Controls.Add(channelCountUpDown, 1, 0);
+
+            settingsPanel.Controls.Add(CreateFieldLabel("Deadzone:"), 2, 0);
+            deadzoneUpDown = new NumericUpDown
+            {
+                Minimum = 0,
+                Maximum = 200,
+                Value = settings.Deadzone,
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(48, 48, 54),
+                ForeColor = Color.White,
+            };
+            deadzoneUpDown.ValueChanged += (_, _) =>
+            {
+                settings.Deadzone = (int)deadzoneUpDown.Value;
+            };
+            settingsPanel.Controls.Add(deadzoneUpDown, 3, 0);
+
+            loadSettingsButton = new Button
+            {
+                Text = "Laden",
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(84, 84, 90),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White,
+            };
+            loadSettingsButton.FlatAppearance.BorderSize = 0;
+            loadSettingsButton.Click += (_, _) => LoadSettingsFromFile();
+            settingsPanel.Controls.Add(loadSettingsButton, 4, 0);
+
+            saveSettingsButton = new Button
+            {
+                Text = "Speichern",
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(84, 84, 90),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White,
+            };
+            saveSettingsButton.FlatAppearance.BorderSize = 0;
+            saveSettingsButton.Click += (_, _) => SaveSettingsToFile();
+            settingsPanel.Controls.Add(saveSettingsButton, 5, 0);
+
+            channelsTable = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                AutoScroll = true,
+                Padding = new Padding(0, 8, 0, 0),
+            };
+            channelsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            channelsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
+            channelsTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
+            root.Controls.Add(channelsTable);
+        }
+
+        private Label CreateFieldLabel(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoSize = true,
+            };
+        }
+
+        private void BuildChannelRows(int count)
+        {
+            channelsTable.SuspendLayout();
+            channelsTable.Controls.Clear();
+            channelsTable.RowStyles.Clear();
+            channelRows.Clear();
+            lastValues = Enumerable.Repeat(-1, count).ToArray();
+            if (settings.Channels.Count > count)
+            {
+                settings.Channels.RemoveRange(count, settings.Channels.Count - count);
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                channelsTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+
+                var label = new Label
+                {
+                    Text = $"Kanal {i + 1}",
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                };
+                channelsTable.Controls.Add(label, 0, i);
+
+                var deviceCombo = new ComboBox
+                {
+                    Dock = DockStyle.Fill,
+                    DropDownStyle = ComboBoxStyle.DropDownList,
+                    BackColor = Color.FromArgb(48, 48, 54),
+                    ForeColor = Color.White,
+                };
+                deviceCombo.SelectedIndexChanged += (_, _) =>
+                {
+                    if (deviceCombo.SelectedItem is AudioDeviceItem item)
+                    {
+                        EnsureChannelSettings(i);
+                        settings.Channels[i].DeviceId = item.Id;
+                    }
+                };
+                channelsTable.Controls.Add(deviceCombo, 1, i);
+
+                var progress = new ProgressBar
+                {
+                    Dock = DockStyle.Fill,
+                    Maximum = 1023,
+                    Value = 0,
+                    Style = ProgressBarStyle.Continuous,
+                };
+                channelsTable.Controls.Add(progress, 2, i);
+
+                var row = new ChannelRow(i, deviceCombo, progress);
+                channelRows.Add(row);
+            }
+
+            PopulateDeviceCombos();
+            ApplyChannelSelections();
+            channelsTable.ResumeLayout();
+        }
+
+        private void UpdateDevices()
+        {
+            audioDevices.Clear();
+            foreach (var device in audioManager.GetOutputDevices())
+            {
+                audioDevices.Add(new AudioDeviceItem(device.Id, device.Name));
+            }
+            PopulateDeviceCombos();
+        }
+
+        private void PopulateDeviceCombos()
+        {
+            foreach (var row in channelRows)
+            {
+                row.DeviceComboBox.Items.Clear();
+                foreach (var device in audioDevices)
+                {
+                    row.DeviceComboBox.Items.Add(device);
+                }
+            }
+        }
+
+        private void ApplySettings(MixerSettings newSettings)
+        {
+            settings = newSettings;
+            if (settings.ChannelCount < 1)
+            {
+                settings.ChannelCount = 1;
+            }
+            if (settings.ChannelCount > MaxChannels)
+            {
+                settings.ChannelCount = MaxChannels;
+            }
+            if (settings.Deadzone < 0)
+            {
+                settings.Deadzone = 0;
+            }
+            if (settings.Deadzone > deadzoneUpDown.Maximum)
+            {
+                settings.Deadzone = (int)deadzoneUpDown.Maximum;
+            }
+
+            channelCountUpDown.Value = settings.ChannelCount;
+            deadzoneUpDown.Value = settings.Deadzone;
+            BuildChannelRows(settings.ChannelCount);
+        }
+
+        private void ApplyChannelSelections()
+        {
+            for (var i = 0; i < channelRows.Count; i++)
+            {
+                EnsureChannelSettings(i);
+                var deviceId = settings.Channels[i].DeviceId;
+                var match = audioDevices.FirstOrDefault(d => d.Id == deviceId);
+                if (match != null)
+                {
+                    channelRows[i].DeviceComboBox.SelectedItem = match;
+                }
+                else if (audioDevices.Count > 0)
+                {
+                    channelRows[i].DeviceComboBox.SelectedIndex = 0;
+                    settings.Channels[i].DeviceId = audioDevices[0].Id;
+                }
+            }
+        }
+
+        private void EnsureChannelSettings(int index)
+        {
+            while (settings.Channels.Count <= index)
+            {
+                settings.Channels.Add(new ChannelSettings());
+            }
+        }
+
+        private void StartAutoScan()
+        {
+            scanCts?.Cancel();
+            scanCts = new CancellationTokenSource();
+            var token = scanCts.Token;
+
+            statusLabel.Text = "Status: Suche Mixer...";
+            rescanButton.Enabled = false;
+
+            Task.Run(async () =>
+            {
+                var port = await FindMixerPortAsync(token);
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                BeginInvoke(() =>
+                {
+                    rescanButton.Enabled = true;
+                    if (port == null)
+                    {
+                        statusLabel.Text = "Status: Kein Mixer gefunden";
+                    }
+                    else
+                    {
+                        ConnectToPort(port);
+                    }
+                });
+            }, token);
+        }
+
+        private async Task<string?> FindMixerPortAsync(CancellationToken token)
+        {
+            foreach (var portName in SerialPort.GetPortNames().OrderBy(p => p))
+            {
+                if (token.IsCancellationRequested)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    using var probe = new SerialPort(portName, 9600)
+                    {
+                        ReadTimeout = 800,
+                        WriteTimeout = 800,
+                        NewLine = "\n",
+                    };
+                    probe.Open();
+                    await Task.Delay(400, token);
+                    probe.WriteLine("HELLO_MIXER");
+                    var response = probe.ReadLine()?.Trim();
+                    if (response == "MIXER_READY")
+                    {
+                        return portName;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Ignore ports that do not respond or cannot be opened.
+                }
+            }
+            return null;
+        }
+
+        private void ConnectToPort(string portName)
+        {
+            CloseSerialPort();
+            try
+            {
+                serialPort = new SerialPort(portName, 9600)
+                {
+                    ReadTimeout = 500,
+                    WriteTimeout = 500,
+                    NewLine = "\n",
+                };
+                serialPort.DataReceived += SerialPortOnDataReceived;
+                serialPort.Open();
+                statusLabel.Text = $"Status: Verbunden ({portName})";
+            }
+            catch (Exception ex)
+            {
+                statusLabel.Text = $"Status: Fehler beim Verbinden ({ex.Message})";
+            }
+        }
+
+        private void CloseSerialPort()
+        {
+            if (serialPort == null)
+            {
+                return;
+            }
+
+            try
+            {
+                serialPort.DataReceived -= SerialPortOnDataReceived;
+                serialPort.Close();
+            }
+            catch (Exception)
+            {
+            }
+            finally
+            {
+                serialPort.Dispose();
+                serialPort = null;
+            }
+        }
+
+        private void SerialPortOnDataReceived(object sender, SerialDataReceivedEventArgs e)
+        {
+            if (serialPort == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var line = serialPort.ReadLine();
+                HandleMixerLine(line);
+            }
+            catch (TimeoutException)
+            {
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private void HandleMixerLine(string line)
+        {
+            var parts = line.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+            {
+                return;
+            }
+
+            BeginInvoke(() =>
+            {
+                for (var i = 0; i < parts.Length && i < channelRows.Count; i++)
+                {
+                    if (!int.TryParse(parts[i], out var value))
+                    {
+                        continue;
+                    }
+
+                    if (value < 0)
+                    {
+                        value = 0;
+                    }
+                    if (value > 1023)
+                    {
+                        value = 1023;
+                    }
+
+                    if (lastValues.Length > i && lastValues[i] != -1)
+                    {
+                        if (Math.Abs(lastValues[i] - value) < settings.Deadzone)
+                        {
+                            continue;
+                        }
+                    }
+
+                    lastValues[i] = value;
+                    channelRows[i].LevelBar.Value = value;
+
+                    var deviceId = settings.Channels.ElementAtOrDefault(i)?.DeviceId;
+                    if (!string.IsNullOrWhiteSpace(deviceId))
+                    {
+                        var volume = value / 1023f;
+                        audioManager.SetDeviceVolume(deviceId, volume);
+                    }
+                }
+            });
+        }
+
+        private void SaveSettingsToFile()
+        {
+            using var dialog = new SaveFileDialog
+            {
+                Filter = "Mixer Einstellungen (*.json)|*.json",
+                FileName = "mixer-settings.json",
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(dialog.FileName, json);
+        }
+
+        private void LoadSettingsFromFile()
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = "Mixer Einstellungen (*.json)|*.json",
+            };
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            try
+            {
+                var json = File.ReadAllText(dialog.FileName);
+                var loaded = JsonSerializer.Deserialize<MixerSettings>(json);
+                if (loaded != null)
+                {
+                    ApplySettings(loaded);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Einstellungen konnten nicht geladen werden: {ex.Message}", "Fehler",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private sealed class ChannelRow
+        {
+            public ChannelRow(int index, ComboBox deviceComboBox, ProgressBar levelBar)
+            {
+                Index = index;
+                DeviceComboBox = deviceComboBox;
+                LevelBar = levelBar;
+            }
+
+            public int Index { get; }
+            public ComboBox DeviceComboBox { get; }
+            public ProgressBar LevelBar { get; }
+        }
+
+        private sealed class AudioDeviceItem
+        {
+            public AudioDeviceItem(string id, string name)
+            {
+                Id = id;
+                Name = name;
+            }
+
+            public string Id { get; }
+            public string Name { get; }
+
+            public override string ToString()
+            {
+                return Name;
+            }
         }
     }
 }
