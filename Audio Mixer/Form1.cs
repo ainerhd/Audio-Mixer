@@ -1,14 +1,24 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using System.IO.Ports;
+using System.Linq;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Drawing;
 
 namespace Audio_Mixer
 {
     public partial class Form1 : Form
     {
         private const int MaxChannels = 8;
+
         private readonly CoreAudioManager audioManager = new();
         private readonly List<ChannelRow> channelRows = new();
         private readonly List<AudioDeviceItem> audioDevices = new();
+
         private CancellationTokenSource? scanCts;
         private SerialPort? serialPort;
         private int[] lastValues = Array.Empty<int>();
@@ -36,6 +46,7 @@ namespace Audio_Mixer
             base.OnFormClosing(e);
             scanCts?.Cancel();
             CloseSerialPort();
+            audioManager.Dispose();
         }
 
         private void BuildUi()
@@ -138,10 +149,7 @@ namespace Audio_Mixer
                 BackColor = Color.FromArgb(48, 48, 54),
                 ForeColor = Color.White,
             };
-            deadzoneUpDown.ValueChanged += (_, _) =>
-            {
-                settings.Deadzone = (int)deadzoneUpDown.Value;
-            };
+            deadzoneUpDown.ValueChanged += (_, _) => { settings.Deadzone = (int)deadzoneUpDown.Value; };
             settingsPanel.Controls.Add(deadzoneUpDown, 3, 0);
 
             loadSettingsButton = new Button
@@ -198,7 +206,9 @@ namespace Audio_Mixer
             channelsTable.Controls.Clear();
             channelsTable.RowStyles.Clear();
             channelRows.Clear();
+
             lastValues = Enumerable.Repeat(-1, count).ToArray();
+
             if (settings.Channels.Count > count)
             {
                 settings.Channels.RemoveRange(count, settings.Channels.Count - count);
@@ -223,14 +233,17 @@ namespace Audio_Mixer
                     BackColor = Color.FromArgb(48, 48, 54),
                     ForeColor = Color.White,
                 };
+
+                var indexCopy = i; // wichtig: Closure-Falle vermeiden
                 deviceCombo.SelectedIndexChanged += (_, _) =>
                 {
                     if (deviceCombo.SelectedItem is AudioDeviceItem item)
                     {
-                        EnsureChannelSettings(i);
-                        settings.Channels[i].DeviceId = item.Id;
+                        EnsureChannelSettings(indexCopy);
+                        settings.Channels[indexCopy].DeviceId = item.Id;
                     }
                 };
+
                 channelsTable.Controls.Add(deviceCombo, 1, i);
 
                 var progress = new ProgressBar
@@ -242,8 +255,7 @@ namespace Audio_Mixer
                 };
                 channelsTable.Controls.Add(progress, 2, i);
 
-                var row = new ChannelRow(i, deviceCombo, progress);
-                channelRows.Add(row);
+                channelRows.Add(new ChannelRow(i, deviceCombo, progress));
             }
 
             PopulateDeviceCombos();
@@ -276,22 +288,11 @@ namespace Audio_Mixer
         private void ApplySettings(MixerSettings newSettings)
         {
             settings = newSettings;
-            if (settings.ChannelCount < 1)
-            {
-                settings.ChannelCount = 1;
-            }
-            if (settings.ChannelCount > MaxChannels)
-            {
-                settings.ChannelCount = MaxChannels;
-            }
-            if (settings.Deadzone < 0)
-            {
-                settings.Deadzone = 0;
-            }
-            if (settings.Deadzone > deadzoneUpDown.Maximum)
-            {
-                settings.Deadzone = (int)deadzoneUpDown.Maximum;
-            }
+
+            if (settings.ChannelCount < 1) settings.ChannelCount = 1;
+            if (settings.ChannelCount > MaxChannels) settings.ChannelCount = MaxChannels;
+            if (settings.Deadzone < 0) settings.Deadzone = 0;
+            if (settings.Deadzone > deadzoneUpDown.Maximum) settings.Deadzone = (int)deadzoneUpDown.Maximum;
 
             channelCountUpDown.Value = settings.ChannelCount;
             deadzoneUpDown.Value = settings.Deadzone;
@@ -305,6 +306,7 @@ namespace Audio_Mixer
                 EnsureChannelSettings(i);
                 var deviceId = settings.Channels[i].DeviceId;
                 var match = audioDevices.FirstOrDefault(d => d.Id == deviceId);
+
                 if (match != null)
                 {
                     channelRows[i].DeviceComboBox.SelectedItem = match;
@@ -331,16 +333,13 @@ namespace Audio_Mixer
             scanCts = new CancellationTokenSource();
             var token = scanCts.Token;
 
-            statusLabel.Text = "Status: Suche Mixer...";
+            statusLabel.Text = "Status: Suche Mixer.";
             rescanButton.Enabled = false;
 
             Task.Run(async () =>
             {
                 var port = await FindMixerPortAsync(token);
-                if (token.IsCancellationRequested)
-                {
-                    return;
-                }
+                if (token.IsCancellationRequested) return;
 
                 BeginInvoke(() =>
                 {
@@ -357,53 +356,89 @@ namespace Audio_Mixer
             }, token);
         }
 
+        // ROBUSTE Auto-Suche (mehr Baudraten, \n und \r\n, DTR/RTS, längere Wartezeit)
         private async Task<string?> FindMixerPortAsync(CancellationToken token)
         {
+            var baudRates = new[] { 9600, 115200, 57600, 38400 };
+            var newLines = new[] { "\n", "\r\n" };
+
             foreach (var portName in SerialPort.GetPortNames().OrderBy(p => p))
             {
-                if (token.IsCancellationRequested)
+                foreach (var baud in baudRates)
                 {
-                    return null;
-                }
+                    foreach (var nl in newLines)
+                    {
+                        if (token.IsCancellationRequested) return null;
 
-                try
-                {
-                    using var probe = new SerialPort(portName, 9600)
-                    {
-                        ReadTimeout = 800,
-                        WriteTimeout = 800,
-                        NewLine = "\n",
-                    };
-                    probe.Open();
-                    await Task.Delay(400, token);
-                    probe.WriteLine("HELLO_MIXER");
-                    var response = probe.ReadLine()?.Trim();
-                    if (response == "MIXER_READY")
-                    {
-                        return portName;
+                        try
+                        {
+                            using var probe = new SerialPort(portName, baud)
+                            {
+                                ReadTimeout = 300,
+                                WriteTimeout = 300,
+                                NewLine = nl,
+                                DtrEnable = true,
+                                RtsEnable = true,
+                            };
+
+                            probe.Open();
+
+                            // Viele Boards resetten beim Öffnen -> länger warten
+                            await Task.Delay(1500, token);
+
+                            // Boot/Debug wegwerfen
+                            probe.DiscardInBuffer();
+                            probe.DiscardOutBuffer();
+
+                            // Handshake
+                            probe.WriteLine("HELLO_MIXER");
+
+                            var deadline = DateTime.UtcNow.AddMilliseconds(1500);
+                            while (DateTime.UtcNow < deadline && !token.IsCancellationRequested)
+                            {
+                                try
+                                {
+                                    var line = probe.ReadLine()?.Trim();
+                                    if (string.IsNullOrEmpty(line)) continue;
+
+                                    if (line.Equals("MIXER_READY", StringComparison.Ordinal))
+                                        return portName;
+                                }
+                                catch (TimeoutException)
+                                {
+                                    // weiter probieren bis deadline
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // Port busy / falsche Settings / kein Device -> nächster Versuch
+                        }
                     }
                 }
-                catch (Exception)
-                {
-                    // Ignore ports that do not respond or cannot be opened.
-                }
             }
+
             return null;
         }
 
         private void ConnectToPort(string portName)
         {
             CloseSerialPort();
+
             try
             {
                 serialPort = new SerialPort(portName, 9600)
                 {
                     ReadTimeout = 500,
                     WriteTimeout = 500,
-                    NewLine = "\n",
+                    NewLine = "\n",        // \n funktioniert auch bei \r\n (Trim entfernt \r)
+                    DtrEnable = true,
+                    RtsEnable = true,
                 };
+
                 serialPort.DataReceived += SerialPortOnDataReceived;
                 serialPort.Open();
+
                 statusLabel.Text = $"Status: Verbunden ({portName})";
             }
             catch (Exception ex)
@@ -414,17 +449,14 @@ namespace Audio_Mixer
 
         private void CloseSerialPort()
         {
-            if (serialPort == null)
-            {
-                return;
-            }
+            if (serialPort == null) return;
 
             try
             {
                 serialPort.DataReceived -= SerialPortOnDataReceived;
                 serialPort.Close();
             }
-            catch (Exception)
+            catch
             {
             }
             finally
@@ -434,12 +466,9 @@ namespace Audio_Mixer
             }
         }
 
-        private void SerialPortOnDataReceived(object sender, SerialDataReceivedEventArgs e)
+        private void SerialPortOnDataReceived(object? sender, SerialDataReceivedEventArgs e)
         {
-            if (serialPort == null)
-            {
-                return;
-            }
+            if (serialPort == null) return;
 
             try
             {
@@ -449,7 +478,7 @@ namespace Audio_Mixer
             catch (TimeoutException)
             {
             }
-            catch (Exception)
+            catch
             {
             }
         }
@@ -457,35 +486,22 @@ namespace Audio_Mixer
         private void HandleMixerLine(string line)
         {
             var parts = line.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0)
-            {
-                return;
-            }
+            if (parts.Length == 0) return;
 
             BeginInvoke(() =>
             {
                 for (var i = 0; i < parts.Length && i < channelRows.Count; i++)
                 {
                     if (!int.TryParse(parts[i], out var value))
-                    {
                         continue;
-                    }
 
-                    if (value < 0)
-                    {
-                        value = 0;
-                    }
-                    if (value > 1023)
-                    {
-                        value = 1023;
-                    }
+                    if (value < 0) value = 0;
+                    if (value > 1023) value = 1023;
 
                     if (lastValues.Length > i && lastValues[i] != -1)
                     {
                         if (Math.Abs(lastValues[i] - value) < settings.Deadzone)
-                        {
                             continue;
-                        }
                     }
 
                     lastValues[i] = value;
@@ -508,10 +524,8 @@ namespace Audio_Mixer
                 Filter = "Mixer Einstellungen (*.json)|*.json",
                 FileName = "mixer-settings.json",
             };
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-            {
-                return;
-            }
+
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(dialog.FileName, json);
@@ -523,10 +537,8 @@ namespace Audio_Mixer
             {
                 Filter = "Mixer Einstellungen (*.json)|*.json",
             };
-            if (dialog.ShowDialog(this) != DialogResult.OK)
-            {
-                return;
-            }
+
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
             try
             {
@@ -569,10 +581,12 @@ namespace Audio_Mixer
             public string Id { get; }
             public string Name { get; }
 
-            public override string ToString()
-            {
-                return Name;
-            }
+            public override string ToString() => Name;
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+
         }
     }
 }

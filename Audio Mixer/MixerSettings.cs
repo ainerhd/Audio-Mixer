@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Audio_Mixer
 {
     public sealed class MixerSettings
