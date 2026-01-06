@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using NAudio.CoreAudioApi;
 
-namespace Audio_Mixer
+namespace Audio_Mixer.Core
 {
     public sealed class CoreAudioManager : IDisposable
     {
@@ -19,11 +19,9 @@ namespace Audio_Mixer
         {
             if (deviceId is null) throw new ArgumentNullException(nameof(deviceId));
 
-            // clamp 0..1
             if (volumeScalar < 0f) volumeScalar = 0f;
             if (volumeScalar > 1f) volumeScalar = 1f;
 
-            // WICHTIG: kein Cache von COM-Objekten -> verhindert "separated from RCW"
             using var device = enumerator.GetDevice(deviceId);
             device.AudioEndpointVolume.MasterVolumeLevelScalar = volumeScalar;
         }
