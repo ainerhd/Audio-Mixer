@@ -62,10 +62,16 @@ namespace Audio_Mixer
         private Button noticeDismissButton = null!;
         private Panel noticePanel = null!;
         private Button presetsButton = null!;
+        private Button refreshDevicesButton = null!;
+        private Label unsavedChangesLabel = null!;
 
         private readonly ToolTip deviceToolTip = new() { ShowAlways = true };
         private StatusState statusState = StatusState.Idle;
         private ViewKind currentView = ViewKind.Mixer;
+        private bool hasUnsavedChanges;
+        private bool volumeErrorShown;
+        private readonly Dictionary<int, DateTime> lastVolumeUpdateTimes = new();
+        private readonly TimeSpan volumeUpdateInterval = TimeSpan.FromMilliseconds(60);
 
         public Form1()
         {
@@ -385,6 +391,14 @@ namespace Audio_Mixer
             rescanButton.Click += (_, _) => StartAutoScan();
             actionPanel.Controls.Add(rescanButton);
 
+            refreshDevicesButton = CreateHeaderButton("Audio-Geräte aktualisieren");
+            refreshDevicesButton.Click += (_, _) =>
+            {
+                UpdateDevices();
+                ApplyChannelSelections();
+            };
+            actionPanel.Controls.Add(refreshDevicesButton);
+
             headerPanel.Controls.Add(actionPanel, 2, 0);
         }
 
@@ -564,6 +578,7 @@ namespace Audio_Mixer
                 if (isApplyingSettings) return;
                 settings.ChannelCount = (int)channelCountUpDown.Value;
                 BuildChannelRows(settings.ChannelCount);
+                MarkUnsavedChanges();
             };
             SettingsLayoutHelper.AddRow(settingsGrid, CreateFieldLabel("Kanäle:"), channelCountUpDown);
 
@@ -581,6 +596,7 @@ namespace Audio_Mixer
             {
                 if (isApplyingSettings) return;
                 settings.Deadzone = (int)deadzoneUpDown.Value;
+                MarkUnsavedChanges();
             };
             SettingsLayoutHelper.AddRow(settingsGrid, CreateFieldLabel("Deadzone:"), deadzoneUpDown);
 
@@ -635,6 +651,16 @@ namespace Audio_Mixer
 
             SettingsLayoutHelper.AddRow(settingsGrid, CreateFieldLabel("Konfiguration:"), configPanel);
 
+            unsavedChangesLabel = new Label
+            {
+                Text = "Änderungen nicht gespeichert",
+                AutoSize = true,
+                ForeColor = theme.WarningText,
+                Margin = new Padding(0, 10, 0, 0),
+                Visible = hasUnsavedChanges,
+            };
+            generalLayout.Controls.Add(unsavedChangesLabel);
+
             var presetsHint = new Label
             {
                 Text = "Presets sind oben rechts verfügbar und können jederzeit gewechselt werden.",
@@ -677,6 +703,7 @@ namespace Audio_Mixer
                 if (isApplyingSettings) return;
                 settings.ManualPortEnabled = manualPortCheckBox.Checked;
                 UpdateManualPortUi();
+                MarkUnsavedChanges();
             };
             connectionPanel.Controls.Add(manualPortCheckBox, 0, 0);
 
@@ -693,7 +720,13 @@ namespace Audio_Mixer
             {
                 if (manualPortComboBox.SelectedItem is string portName)
                 {
+                    if (settings.ManualPortName == portName)
+                    {
+                        return;
+                    }
+
                     settings.ManualPortName = portName;
+                    MarkUnsavedChanges();
                 }
             };
             connectionPanel.Controls.Add(manualPortComboBox, 1, 0);
@@ -792,6 +825,7 @@ namespace Audio_Mixer
                 if (isApplyingSettings) return;
                 settings.ChannelRowHeight = (int)channelRowHeightUpDown.Value;
                 BuildChannelRows(settings.ChannelCount);
+                MarkUnsavedChanges();
             };
             SettingsLayoutHelper.AddRow(channelSizePanel, CreateFieldLabel("Zeilenhöhe:"), channelRowHeightUpDown);
 
@@ -810,6 +844,7 @@ namespace Audio_Mixer
                 if (isApplyingSettings) return;
                 settings.ChannelLabelWidth = (int)channelLabelWidthUpDown.Value;
                 BuildChannelRows(settings.ChannelCount);
+                MarkUnsavedChanges();
             };
             SettingsLayoutHelper.AddRow(channelSizePanel, CreateFieldLabel("Kanalbreite:"), channelLabelWidthUpDown);
         }
@@ -972,14 +1007,14 @@ namespace Audio_Mixer
 
             if (row.IsMuted)
             {
-                audioManager.SetDeviceVolume(deviceId, 0f);
+                TrySetDeviceVolume(deviceId, 0f);
                 return;
             }
 
             var value = row.Index < lastValues.Length ? lastValues[row.Index] : 0;
             if (value < 0) value = 0;
             var volume = value / 1023f;
-            audioManager.SetDeviceVolume(deviceId, volume);
+            TrySetDeviceVolume(deviceId, volume);
         }
 
         private void UpdateMuteUi(ChannelRow row)
@@ -1017,6 +1052,7 @@ namespace Audio_Mixer
             profile ??= GetFallbackProfile(profileName);
             settings = profile;
             RebuildUi();
+            SetUnsavedChanges(false);
             if (loadResult != null)
             {
                 HandleConfigWarnings(loadResult, $"Preset {profileName}");
@@ -1045,13 +1081,46 @@ namespace Audio_Mixer
 
         private static MixerSettings GetFallbackProfile(string profileName)
         {
-            var fallback = MixerSettings.CreateDefault();
+            static MixerSettings BuildPreset(Action<MixerSettings> configure)
+            {
+                var preset = MixerSettings.CreateDefault();
+                configure(preset);
+                return preset;
+            }
+
             return profileName.ToLowerInvariant() switch
             {
-                "gaming" => fallback,
-                "streaming" => fallback,
-                "office" => fallback,
-                _ => fallback,
+                "gaming" => BuildPreset(preset =>
+                {
+                    preset.ChannelCount = 4;
+                    preset.Deadzone = 4;
+                    preset.BackgroundColorArgb = Color.FromArgb(20, 18, 22).ToArgb();
+                    preset.SurfaceColorArgb = Color.FromArgb(34, 30, 36).ToArgb();
+                    preset.SurfaceAccentColorArgb = Color.FromArgb(48, 38, 44).ToArgb();
+                    preset.AccentColorArgb = Color.FromArgb(212, 84, 88).ToArgb();
+                    preset.MutedTextColorArgb = Color.FromArgb(182, 176, 190).ToArgb();
+                }),
+                "streaming" => BuildPreset(preset =>
+                {
+                    preset.ChannelCount = 6;
+                    preset.Deadzone = 8;
+                    preset.BackgroundColorArgb = Color.FromArgb(18, 20, 28).ToArgb();
+                    preset.SurfaceColorArgb = Color.FromArgb(30, 34, 46).ToArgb();
+                    preset.SurfaceAccentColorArgb = Color.FromArgb(40, 44, 60).ToArgb();
+                    preset.AccentColorArgb = Color.FromArgb(118, 103, 207).ToArgb();
+                    preset.MutedTextColorArgb = Color.FromArgb(172, 178, 200).ToArgb();
+                }),
+                "office" => BuildPreset(preset =>
+                {
+                    preset.ChannelCount = 3;
+                    preset.Deadzone = 12;
+                    preset.BackgroundColorArgb = Color.FromArgb(22, 24, 26).ToArgb();
+                    preset.SurfaceColorArgb = Color.FromArgb(36, 38, 42).ToArgb();
+                    preset.SurfaceAccentColorArgb = Color.FromArgb(44, 46, 50).ToArgb();
+                    preset.AccentColorArgb = Color.FromArgb(88, 142, 206).ToArgb();
+                    preset.MutedTextColorArgb = Color.FromArgb(176, 180, 186).ToArgb();
+                }),
+                _ => MixerSettings.CreateDefault(),
             };
         }
 
@@ -1112,6 +1181,7 @@ namespace Audio_Mixer
                 };
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
                 setColor(dialog.Color);
+                MarkUnsavedChanges();
                 RebuildUi();
             };
 
@@ -1125,12 +1195,15 @@ namespace Audio_Mixer
             var selectedView = currentView;
             var statusText = statusLabel?.Text;
             var previousStatus = statusState;
+            var hadUnsavedChanges = hasUnsavedChanges;
 
             SuspendLayout();
             Controls.Clear();
             BuildUi();
             UpdateDevices();
             ApplySettings(settings);
+            hasUnsavedChanges = hadUnsavedChanges;
+            UpdateUnsavedChangesUi();
 
             if (!string.IsNullOrEmpty(statusText))
             {
@@ -1199,6 +1272,7 @@ namespace Audio_Mixer
 
         private void BuildChannelRows(int count)
         {
+            lastVolumeUpdateTimes.Clear();
             channelsTable.SuspendLayout();
             channelsTable.Controls.Clear();
             channelsTable.RowStyles.Clear();
@@ -1243,8 +1317,17 @@ namespace Audio_Mixer
                 {
                     if (deviceCombo.SelectedItem is AudioDeviceItem item)
                     {
+                        if (item.IsMissing)
+                        {
+                            return;
+                        }
+
                         EnsureChannelSettings(indexCopy);
-                        settings.Channels[indexCopy].DeviceId = item.Id;
+                        if (settings.Channels[indexCopy].DeviceId != item.Id)
+                        {
+                            settings.Channels[indexCopy].DeviceId = item.Id;
+                            MarkUnsavedChanges();
+                        }
                     }
                     UpdateDeviceToolTip(deviceCombo);
                 };
@@ -1389,14 +1472,39 @@ namespace Audio_Mixer
                 {
                     channelRows[i].DeviceComboBox.SelectedItem = match;
                 }
+                else if (!string.IsNullOrWhiteSpace(deviceId))
+                {
+                    var missingItem = new AudioDeviceItem(
+                        deviceId,
+                        $"Nicht verfügbar ({deviceId})",
+                        isMissing: true);
+                    channelRows[i].DeviceComboBox.Items.Insert(0, missingItem);
+                    channelRows[i].DeviceComboBox.SelectedItem = missingItem;
+                }
                 else if (audioDevices.Count > 0)
                 {
                     channelRows[i].DeviceComboBox.SelectedIndex = 0;
                     settings.Channels[i].DeviceId = audioDevices[0].Id;
+                    if (!isApplyingSettings)
+                    {
+                        MarkUnsavedChanges();
+                    }
                 }
 
                 UpdateDeviceToolTip(channelRows[i].DeviceComboBox);
                 UpdateComboDropDownWidth(channelRows[i].DeviceComboBox);
+            }
+
+            var missingDevices = settings.Channels
+                .Select((channel, index) => (channel.DeviceId, index))
+                .Where(entry =>
+                    !string.IsNullOrWhiteSpace(entry.DeviceId)
+                    && audioDevices.All(device => device.Id != entry.DeviceId))
+                .ToList();
+            if (missingDevices.Count > 0)
+            {
+                var missingLabels = string.Join(", ", missingDevices.Select(entry => $"Kanal {entry.index + 1}"));
+                ShowNotice($"Audio-Gerät fehlt in {missingLabels}. Bitte neu zuweisen.");
             }
         }
 
@@ -1598,18 +1706,53 @@ namespace Audio_Mixer
                     var deviceId = settings.Channels.ElementAtOrDefault(i)?.DeviceId;
                     if (!string.IsNullOrWhiteSpace(deviceId))
                     {
+                        if (ShouldThrottleVolumeUpdate(i))
+                        {
+                            continue;
+                        }
+
                         if (channelRows[i].IsMuted)
                         {
-                            audioManager.SetDeviceVolume(deviceId, 0f);
+                            TrySetDeviceVolume(deviceId, 0f);
                         }
                         else
                         {
                             var volume = value / 1023f;
-                            audioManager.SetDeviceVolume(deviceId, volume);
+                            TrySetDeviceVolume(deviceId, volume);
                         }
                     }
                 }
             });
+        }
+
+        private bool ShouldThrottleVolumeUpdate(int channelIndex)
+        {
+            var now = DateTime.UtcNow;
+            if (lastVolumeUpdateTimes.TryGetValue(channelIndex, out var lastUpdate))
+            {
+                if (now - lastUpdate < volumeUpdateInterval)
+                {
+                    return true;
+                }
+            }
+
+            lastVolumeUpdateTimes[channelIndex] = now;
+            return false;
+        }
+
+        private void TrySetDeviceVolume(string deviceId, float volume)
+        {
+            try
+            {
+                audioManager.SetDeviceVolume(deviceId, volume);
+            }
+            catch (Exception ex)
+            {
+                if (volumeErrorShown) return;
+                volumeErrorShown = true;
+                UpdateStatus(StatusState.Error, $"Status: Audio-Update fehlgeschlagen ({ex.Message})");
+                ShowNotice("Audio-Ausgang konnte nicht aktualisiert werden. Bitte Geräte prüfen.");
+            }
         }
 
         private void SaveSettingsToFile()
@@ -1625,6 +1768,7 @@ namespace Audio_Mixer
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(dialog.FileName, json);
             PersistLastConfigIdentifier(dialog.FileName);
+            SetUnsavedChanges(false);
         }
 
         private void LoadSettingsFromFile()
@@ -1645,6 +1789,7 @@ namespace Audio_Mixer
             RebuildUi();
             PersistLastConfigIdentifier(dialog.FileName);
             HandleConfigWarnings(result, Path.GetFileName(dialog.FileName));
+            SetUnsavedChanges(false);
         }
 
         private static void EnableDoubleBuffering(Control control)
@@ -1726,6 +1871,7 @@ namespace Audio_Mixer
             settings = result.Settings;
             RebuildUi();
             HandleConfigWarnings(result, "Aktuelle Konfiguration");
+            SetUnsavedChanges(false);
             return true;
         }
 
@@ -1798,16 +1944,35 @@ namespace Audio_Mixer
 
         private sealed class AudioDeviceItem
         {
-            public AudioDeviceItem(string id, string name)
+            public AudioDeviceItem(string id, string name, bool isMissing = false)
             {
                 Id = id;
                 Name = name;
+                IsMissing = isMissing;
             }
 
             public string Id { get; }
             public string Name { get; }
+            public bool IsMissing { get; }
 
             public override string ToString() => Name;
+        }
+
+        private void MarkUnsavedChanges()
+        {
+            SetUnsavedChanges(true);
+        }
+
+        private void SetUnsavedChanges(bool hasChanges)
+        {
+            hasUnsavedChanges = hasChanges;
+            UpdateUnsavedChangesUi();
+        }
+
+        private void UpdateUnsavedChangesUi()
+        {
+            if (unsavedChangesLabel == null) return;
+            unsavedChangesLabel.Visible = hasUnsavedChanges;
         }
 
         private void Form1_Load(object sender, EventArgs e)
