@@ -461,51 +461,94 @@ namespace Audio_Mixer
 
         private void BuildSettingsTabContent(Panel tab)
         {
+            var settingsTabs = new TabControl
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                SizeMode = TabSizeMode.Fixed,
+                ItemSize = new Size(170, 34),
+                Padding = new Point(18, 6),
+            };
+            tab.Controls.Add(settingsTabs);
+
+            var generalPage = CreateSettingsTab("Allgemein");
+            settingsTabs.TabPages.Add(generalPage);
+            BuildGeneralSettingsTab(generalPage);
+
+            var connectionPage = CreateSettingsTab("Verbindung");
+            settingsTabs.TabPages.Add(connectionPage);
+            BuildConnectionSettingsTab(connectionPage);
+
+            var colorsPage = CreateSettingsTab("Farben");
+            settingsTabs.TabPages.Add(colorsPage);
+            BuildColorSettingsTab(colorsPage);
+
+            var channelSizePage = CreateSettingsTab("Kanalgröße");
+            settingsTabs.TabPages.Add(channelSizePage);
+            BuildChannelSizeSettingsTab(channelSizePage);
+        }
+
+        private TabPage CreateSettingsTab(string title)
+        {
+            return new TabPage(title)
+            {
+                BackColor = theme.Background,
+                ForeColor = theme.Text,
+            };
+        }
+
+        private TableLayoutPanel CreateSettingsTabRoot(TabPage page)
+        {
+            var scrollPanel = SettingsLayoutHelper.EnsureScrollableTabPage(page);
+            scrollPanel.Padding = theme.PagePadding;
+            scrollPanel.BackColor = theme.Background;
+
             var root = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
                 ColumnCount = 1,
-                RowCount = 4,
-                Padding = theme.PagePadding,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            tab.Controls.Add(root);
+            scrollPanel.Controls.Add(root);
+            return root;
+        }
 
-            var generalCard = CreateCardPanel();
-            generalCard.Margin = new Padding(0, 0, 0, 16);
-            root.Controls.Add(generalCard);
+        private TableLayoutPanel CreateSettingsCard(TableLayoutPanel root, string headerText)
+        {
+            var card = CreateCardPanel();
+            card.Dock = DockStyle.Top;
+            card.AutoSize = true;
+            card.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            card.Margin = new Padding(0, 0, 0, 16);
+            root.Controls.Add(card);
 
-            var generalContainer = new TableLayoutPanel
+            var layout = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
                 ColumnCount = 1,
-                RowCount = 3,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
-            generalContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            generalContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            generalContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            generalCard.Controls.Add(generalContainer);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            card.Controls.Add(layout);
 
-            generalContainer.Controls.Add(CreateSectionHeader("Allgemeine Einstellungen"), 0, 0);
+            var header = CreateSectionHeader(headerText);
+            header.Margin = new Padding(0, 0, 0, 10);
+            layout.Controls.Add(header, 0, 0);
 
-            var settingsPanel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 5,
-                AutoSize = true,
-            };
-            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            generalContainer.Controls.Add(settingsPanel, 0, 1);
+            return layout;
+        }
 
-            settingsPanel.Controls.Add(CreateFieldLabel("Kanäle:"), 0, 0);
+        private void BuildGeneralSettingsTab(TabPage page)
+        {
+            var root = CreateSettingsTabRoot(page);
+            var generalLayout = CreateSettingsCard(root, "Allgemeine Einstellungen");
+
+            var settingsGrid = SettingsLayoutHelper.BuildStandardGrid(generalLayout, 2, new Padding(0));
+
             channelCountUpDown = new NumericUpDown
             {
                 Minimum = 1,
@@ -514,6 +557,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 BackColor = theme.SurfaceAlt,
                 ForeColor = theme.Text,
+                MinimumSize = new Size(140, 0),
             };
             channelCountUpDown.ValueChanged += (_, _) =>
             {
@@ -521,9 +565,8 @@ namespace Audio_Mixer
                 settings.ChannelCount = (int)channelCountUpDown.Value;
                 BuildChannelRows(settings.ChannelCount);
             };
-            settingsPanel.Controls.Add(channelCountUpDown, 1, 0);
+            SettingsLayoutHelper.AddRow(settingsGrid, CreateFieldLabel("Kanäle:"), channelCountUpDown);
 
-            settingsPanel.Controls.Add(CreateFieldLabel("Deadzone:"), 2, 0);
             deadzoneUpDown = new NumericUpDown
             {
                 Minimum = 0,
@@ -532,26 +575,29 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 BackColor = theme.SurfaceAlt,
                 ForeColor = theme.Text,
+                MinimumSize = new Size(140, 0),
             };
             deadzoneUpDown.ValueChanged += (_, _) =>
             {
                 if (isApplyingSettings) return;
                 settings.Deadzone = (int)deadzoneUpDown.Value;
             };
-            settingsPanel.Controls.Add(deadzoneUpDown, 3, 0);
+            SettingsLayoutHelper.AddRow(settingsGrid, CreateFieldLabel("Deadzone:"), deadzoneUpDown);
 
             var configPanel = new Panel
             {
                 Dock = DockStyle.Fill,
                 BackColor = theme.SurfaceAlt,
                 Padding = new Padding(8, 6, 8, 6),
-                Margin = new Padding(8, 0, 0, 0),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
             var configLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
             configLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             configLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -566,6 +612,7 @@ namespace Audio_Mixer
                 ForeColor = theme.Text,
                 Margin = new Padding(0, 0, 6, 0),
                 Padding = new Padding(6, 2, 6, 2),
+                MinimumSize = new Size(120, 0),
             };
             loadSettingsButton.FlatAppearance.BorderSize = 0;
             loadSettingsButton.Click += (_, _) => LoadSettingsFromFile();
@@ -580,51 +627,42 @@ namespace Audio_Mixer
                 ForeColor = theme.Text,
                 Margin = new Padding(6, 0, 0, 0),
                 Padding = new Padding(6, 2, 6, 2),
+                MinimumSize = new Size(120, 0),
             };
             saveSettingsButton.FlatAppearance.BorderSize = 0;
             saveSettingsButton.Click += (_, _) => SaveSettingsToFile();
             configLayout.Controls.Add(saveSettingsButton, 1, 0);
 
-            settingsPanel.Controls.Add(configPanel, 4, 0);
+            SettingsLayoutHelper.AddRow(settingsGrid, CreateFieldLabel("Konfiguration:"), configPanel);
 
             var presetsHint = new Label
             {
                 Text = "Presets sind oben rechts verfügbar und können jederzeit gewechselt werden.",
                 AutoSize = true,
                 ForeColor = theme.MutedText,
-                Margin = new Padding(0, 8, 0, 0),
+                Margin = new Padding(0, 10, 0, 0),
+                MaximumSize = new Size(560, 0),
             };
-            generalContainer.Controls.Add(presetsHint, 0, 2);
+            generalLayout.Controls.Add(presetsHint);
+        }
 
-            var connectionCard = CreateCardPanel();
-            connectionCard.Margin = new Padding(0, 0, 0, 16);
-            root.Controls.Add(connectionCard);
-
-            var connectionContainer = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-                AutoSize = true,
-            };
-            connectionContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            connectionContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            connectionContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            connectionCard.Controls.Add(connectionContainer);
-
-            connectionContainer.Controls.Add(CreateSectionHeader("Verbindung"), 0, 0);
+        private void BuildConnectionSettingsTab(TabPage page)
+        {
+            var root = CreateSettingsTabRoot(page);
+            var connectionLayout = CreateSettingsCard(root, "Verbindung");
 
             var connectionPanel = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
                 ColumnCount = 4,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-            connectionContainer.Controls.Add(connectionPanel, 0, 1);
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            connectionPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            connectionLayout.Controls.Add(connectionPanel);
 
             manualPortCheckBox = new CheckBox
             {
@@ -632,6 +670,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 ForeColor = theme.Text,
                 AutoSize = true,
+                Margin = new Padding(0, 0, 12, 0),
             };
             manualPortCheckBox.CheckedChanged += (_, _) =>
             {
@@ -648,6 +687,7 @@ namespace Audio_Mixer
                 BackColor = theme.SurfaceAlt,
                 ForeColor = theme.Text,
                 FlatStyle = FlatStyle.Flat,
+                MinimumSize = new Size(220, 0),
             };
             manualPortComboBox.SelectedIndexChanged += (_, _) =>
             {
@@ -665,6 +705,8 @@ namespace Audio_Mixer
                 BackColor = theme.SurfaceAlt,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = theme.Text,
+                Margin = new Padding(8, 0, 8, 0),
+                MinimumSize = new Size(150, 0),
             };
             refreshPortsButton.FlatAppearance.BorderSize = 0;
             refreshPortsButton.Click += (_, _) => PopulatePortList();
@@ -677,6 +719,7 @@ namespace Audio_Mixer
                 BackColor = theme.Accent,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = theme.Text,
+                MinimumSize = new Size(120, 0),
             };
             manualConnectButton.FlatAppearance.BorderSize = 0;
             manualConnectButton.Click += (_, _) => ConnectManualPort();
@@ -687,38 +730,29 @@ namespace Audio_Mixer
                 Text = "Aktiviere manuelle Portwahl, um einen Port auszuwählen.",
                 AutoSize = true,
                 ForeColor = theme.MutedText,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 6, 0, 0),
+                Dock = DockStyle.Top,
+                Margin = new Padding(0, 8, 0, 0),
+                MaximumSize = new Size(640, 0),
             };
-            connectionContainer.Controls.Add(manualPortHintLabel, 0, 2);
+            connectionLayout.Controls.Add(manualPortHintLabel);
+        }
 
-            var colorCard = CreateCardPanel();
-            colorCard.Margin = new Padding(0, 0, 0, 16);
-            root.Controls.Add(colorCard);
-
-            var colorContainer = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 2,
-                AutoSize = true,
-            };
-            colorContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            colorContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            colorCard.Controls.Add(colorContainer);
-
-            colorContainer.Controls.Add(CreateSectionHeader("Farben"), 0, 0);
+        private void BuildColorSettingsTab(TabPage page)
+        {
+            var root = CreateSettingsTabRoot(page);
+            var colorLayout = CreateSettingsCard(root, "Farben");
 
             var colorPanel = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
                 ColumnCount = 3,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
             };
-            colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40));
-            colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
-            colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
-            colorContainer.Controls.Add(colorPanel, 0, 1);
+            colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            colorPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            colorLayout.Controls.Add(colorPanel);
 
             colorPanel.Controls.Add(CreateHeaderLabel("Farbe"), 0, 0);
             colorPanel.Controls.Add(CreateHeaderLabel("Vorschau"), 1, 0);
@@ -734,36 +768,15 @@ namespace Audio_Mixer
                 color => settings.AccentColorArgb = color.ToArgb());
             AddColorPickerRow(colorPanel, 5, "Gedämpfter Text", () => theme.MutedText,
                 color => settings.MutedTextColorArgb = color.ToArgb());
+        }
 
-            var channelSizeCard = CreateCardPanel();
-            root.Controls.Add(channelSizeCard);
+        private void BuildChannelSizeSettingsTab(TabPage page)
+        {
+            var root = CreateSettingsTabRoot(page);
+            var channelSizeLayout = CreateSettingsCard(root, "Kanalgröße");
 
-            var channelSizeContainer = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 2,
-                AutoSize = true,
-            };
-            channelSizeContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            channelSizeContainer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            channelSizeCard.Controls.Add(channelSizeContainer);
+            var channelSizePanel = SettingsLayoutHelper.BuildStandardGrid(channelSizeLayout, 2, new Padding(0));
 
-            channelSizeContainer.Controls.Add(CreateSectionHeader("Kanalgröße"), 0, 0);
-
-            var channelSizePanel = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 4,
-                AutoSize = true,
-            };
-            channelSizePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-            channelSizePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-            channelSizePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
-            channelSizePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-            channelSizeContainer.Controls.Add(channelSizePanel, 0, 1);
-
-            channelSizePanel.Controls.Add(CreateFieldLabel("Zeilenhöhe:"), 0, 0);
             channelRowHeightUpDown = new NumericUpDown
             {
                 Minimum = 40,
@@ -772,6 +785,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 BackColor = theme.SurfaceAlt,
                 ForeColor = theme.Text,
+                MinimumSize = new Size(140, 0),
             };
             channelRowHeightUpDown.ValueChanged += (_, _) =>
             {
@@ -779,9 +793,8 @@ namespace Audio_Mixer
                 settings.ChannelRowHeight = (int)channelRowHeightUpDown.Value;
                 BuildChannelRows(settings.ChannelCount);
             };
-            channelSizePanel.Controls.Add(channelRowHeightUpDown, 1, 0);
+            SettingsLayoutHelper.AddRow(channelSizePanel, CreateFieldLabel("Zeilenhöhe:"), channelRowHeightUpDown);
 
-            channelSizePanel.Controls.Add(CreateFieldLabel("Kanalbreite:"), 2, 0);
             channelLabelWidthUpDown = new NumericUpDown
             {
                 Minimum = 80,
@@ -790,6 +803,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 BackColor = theme.SurfaceAlt,
                 ForeColor = theme.Text,
+                MinimumSize = new Size(140, 0),
             };
             channelLabelWidthUpDown.ValueChanged += (_, _) =>
             {
@@ -797,7 +811,7 @@ namespace Audio_Mixer
                 settings.ChannelLabelWidth = (int)channelLabelWidthUpDown.Value;
                 BuildChannelRows(settings.ChannelCount);
             };
-            channelSizePanel.Controls.Add(channelLabelWidthUpDown, 3, 0);
+            SettingsLayoutHelper.AddRow(channelSizePanel, CreateFieldLabel("Kanalbreite:"), channelLabelWidthUpDown);
         }
 
         private Label CreateFieldLabel(string text)
@@ -809,6 +823,7 @@ namespace Audio_Mixer
                 ForeColor = theme.MutedText,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoSize = true,
+                MaximumSize = new Size(260, 0),
             };
         }
 
@@ -1076,6 +1091,7 @@ namespace Audio_Mixer
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 6, 0, 6),
                 BorderStyle = BorderStyle.FixedSingle,
+                MinimumSize = new Size(80, 0),
             };
             var button = new Button
             {
@@ -1084,6 +1100,7 @@ namespace Audio_Mixer
                 BackColor = theme.SurfaceAlt,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = theme.Text,
+                MinimumSize = new Size(140, 0),
             };
             button.FlatAppearance.BorderSize = 0;
             button.Click += (_, _) =>
