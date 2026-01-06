@@ -1778,6 +1778,7 @@ namespace Audio_Mixer
 
         private sealed class StatusDot : Control
         {
+            [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
             public Color DotColor { get; set; } = Color.DimGray;
 
             protected override void OnPaint(PaintEventArgs e)
