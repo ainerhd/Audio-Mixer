@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Reflection;
 using Audio_Mixer.Core;
 using Audio_Mixer.UI;
+using System.ComponentModel;
 
 namespace Audio_Mixer
 {
