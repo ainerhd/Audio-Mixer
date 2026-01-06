@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Reflection;
 using Audio_Mixer.Core;
 using Audio_Mixer.UI;
+using System.ComponentModel;
 
 namespace Audio_Mixer
 {
@@ -1923,6 +1924,7 @@ namespace Audio_Mixer
 
         private sealed class StatusDot : Control
         {
+            [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
             public Color DotColor { get; set; } = Color.DimGray;
 
             protected override void OnPaint(PaintEventArgs e)

@@ -86,7 +86,7 @@ namespace Audio_Mixer.UI
 
             if (grid.ColumnCount >= 3)
             {
-                TableLayoutPanel.SetColumnSpan(control, 2);
+                grid.SetColumnSpan(control, 2);
             }
         }
     }
